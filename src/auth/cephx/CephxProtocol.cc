@@ -32,14 +32,17 @@ void cephx_calc_client_server_challenge(CephContext *cct, CryptoKey& secret, uin
   b.client_challenge = client_challenge;
 
   bufferlist enc;
-  if (encode_encrypt(cct, b, secret, enc, error))
+  if (encode_encrypt(cct, b, secret, enc, error)) {
+    ldout(cct, 10) << "cephx_calc_client_server_challenge secret " << secret << " server_challenge " << server_challenge << " client_challenge " <<  client_challenge << " error " << error << dendl;
     return;
+  }
 
   uint64_t k = 0;
   const uint64_t *p = (const uint64_t *)enc.c_str();
   for (int pos = 0; pos + sizeof(k) <= enc.length(); pos+=sizeof(k), p++)
     k ^= mswab64(*p);
   *key = k;
+  ldout(cct, 10) << "cephx_calc_client_server_challenge secret " << secret << " server_challenge " << server_challenge << " client_challenge " <<  client_challenge << " key " << k << dendl;
 }
 
 
