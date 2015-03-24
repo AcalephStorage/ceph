@@ -26,19 +26,29 @@
 #include "common/safe_io.h"
 #include "common/version.h"
 #include "common/Formatter.h"
-
+# ifdef _WIN32
+#include <ws2tcpip.h>
+#include <winsock2.h>
+#include <winsock.h>
+#define F_SETFD 2
+#define FD_CLOEXEC 1
+# else
+#include <sys/poll.h>
+#include <sys/socket.h>
+#include <sys/un.h>
+# endif
 #include <errno.h>
 #include <fcntl.h>
 #include <map>
-#include <poll.h>
+
 #include <set>
 #include <sstream>
 #include <stdint.h>
 #include <string.h>
 #include <string>
-#include <sys/socket.h>
+
 #include <sys/types.h>
-#include <sys/un.h>
+
 #include <unistd.h>
 
 #include "include/compat.h"
@@ -46,6 +56,7 @@
 #define dout_subsys ceph_subsys_asok
 #undef dout_prefix
 #define dout_prefix *_dout << "asok(" << (void*)m_cct << ") "
+
 
 
 using std::ostringstream;
@@ -152,7 +163,13 @@ std::string AdminSocket::create_shutdown_pipe(int *pipe_rd, int *pipe_wr)
 std::string AdminSocket::bind_and_listen(const std::string &sock_path, int *fd)
 {
   ldout(m_cct, 5) << "bind_and_listen " << sock_path << dendl;
-
+#ifdef _WIN32
+    WSADATA wsa;
+  int retval;
+  retval = WSAStartup(MAKEWORD(2,2),&wsa);
+  ldout(m_cct,0) << "\nInitialising Winsock...\n" << dendl;
+  struct sockaddr_in address;
+#else
   struct sockaddr_un address;
   if (sock_path.size() > sizeof(address.sun_path) - 1) {
     ostringstream oss;
@@ -162,7 +179,12 @@ std::string AdminSocket::bind_and_listen(const std::string &sock_path, int *fd)
 	<< (sizeof(address.sun_path) - 1);
     return oss.str();
   }
+#endif
+#ifdef _WIN32
+  int sock_fd = socket(AF_INET, SOCK_STREAM, 0);
+#else
   int sock_fd = socket(PF_UNIX, SOCK_STREAM, 0);
+#endif
   if (sock_fd < 0) {
     int err = errno;
     ostringstream oss;
@@ -170,7 +192,8 @@ std::string AdminSocket::bind_and_listen(const std::string &sock_path, int *fd)
 	<< "failed to create socket: " << cpp_strerror(err);
     return oss.str();
   }
-  int r = fcntl(sock_fd, F_SETFD, FD_CLOEXEC);
+#ifndef _WIN32
+  int r = socket(sock_fd, F_SETFD, FD_CLOEXEC);
   if (r < 0) {
     r = errno;
     VOID_TEMP_FAILURE_RETRY(::close(sock_fd));
@@ -178,10 +201,48 @@ std::string AdminSocket::bind_and_listen(const std::string &sock_path, int *fd)
     oss << "AdminSocket::bind_and_listen: failed to fcntl on socket: " << cpp_strerror(r);
     return oss.str();
   }
+#endif
+#ifdef _WIN32
+  memset(&address, 0, sizeof(struct sockaddr_in));
+  address.sin_family = AF_INET;
+#else
   memset(&address, 0, sizeof(struct sockaddr_un));
   address.sun_family = AF_UNIX;
   snprintf(address.sun_path, sizeof(address.sun_path),
 	   "%s", sock_path.c_str());
+#endif
+#ifdef _WIN32
+  if (bind(sock_fd, (struct sockaddr*)&address,
+	   sizeof(struct sockaddr_in)) != 0) {
+    int err = errno;
+    if (err == EADDRINUSE) {
+      AdminSocketClient client(sock_path);
+      bool ok;
+      client.ping(&ok);
+      if (ok) {
+	ldout(m_cct, 20) << "socket " << sock_path << " is in use" << dendl;
+	err = EEXIST;
+      } else {
+	ldout(m_cct, 20) << "unlink stale file " << sock_path << dendl;
+	VOID_TEMP_FAILURE_RETRY(unlink(sock_path.c_str()));
+	if (bind(sock_fd, (struct sockaddr*)&address,
+		 sizeof(struct sockaddr_in)) == 0) {
+	  err = 0;
+	} else {
+	  err = errno;
+	}
+      }
+    }
+    if (err != 0) {
+      ostringstream oss;
+      oss << "AdminSocket::bind_and_listen: "
+	  << "failed to bind the UNIX domain socket to '" << sock_path
+	  << "': " << cpp_strerror(err);
+      close(sock_fd);
+      return oss.str();
+    }
+  }
+#else
   if (bind(sock_fd, (struct sockaddr*)&address,
 	   sizeof(struct sockaddr_un)) != 0) {
     int err = errno;
@@ -212,6 +273,7 @@ std::string AdminSocket::bind_and_listen(const std::string &sock_path, int *fd)
       return oss.str();
     }
   }
+#endif
   if (listen(sock_fd, 5) != 0) {
     int err = errno;
     ostringstream oss;
@@ -228,6 +290,7 @@ std::string AdminSocket::bind_and_listen(const std::string &sock_path, int *fd)
 void* AdminSocket::entry()
 {
   ldout(m_cct, 5) << "entry start" << dendl;
+#ifndef _WIN32
   while (true) {
     struct pollfd fds[2];
     memset(fds, 0, sizeof(fds));
@@ -256,13 +319,18 @@ void* AdminSocket::entry()
       return PFL_SUCCESS;
     }
   }
+#endif
   ldout(m_cct, 5) << "entry exit" << dendl;
 }
 
 
 bool AdminSocket::do_accept()
 {
+#ifdef _WIN32
+  struct sockaddr_in address;
+#else
   struct sockaddr_un address;
+#endif
   socklen_t address_length = sizeof(address);
   ldout(m_cct, 30) << "AdminSocket: calling accept" << dendl;
   int connection_fd = accept(m_sock_fd, (struct sockaddr*) &address,
@@ -328,12 +396,13 @@ bool AdminSocket::do_accept()
     ldout(m_cct, 0) << "AdminSocket: " << errss << dendl;
     return false;
   }
+#ifndef _WIN32
   cmd_getval(m_cct, cmdmap, "format", format);
   if (format != "json" && format != "json-pretty" &&
       format != "xml" && format != "xml-pretty")
     format = "json-pretty";
   cmd_getval(m_cct, cmdmap, "prefix", c);
-
+#endif
   m_lock.Lock();
   map<string,AdminSocketHook*>::iterator p;
   string match = c;
@@ -449,8 +518,10 @@ public:
   HelpHook(AdminSocket *as) : m_as(as) {}
   bool call(string command, cmdmap_t &cmdmap, string format, bufferlist& out) {
     Formatter *f = new_formatter(format);
+#ifndef _WIN32
     if (!f)
       f = new_formatter("json-pretty");
+#endif
     f->open_object_section("help");
     for (map<string,string>::iterator p = m_as->m_help.begin();
 	 p != m_as->m_help.end();
@@ -473,6 +544,9 @@ public:
   GetdescsHook(AdminSocket *as) : m_as(as) {}
   bool call(string command, cmdmap_t &cmdmap, string format, bufferlist& out) {
     int cmdnum = 0;
+#ifdef _WIN32
+    void * p = pthread_self().p;
+#endif
     JSONFormatter jf(false);
     jf.open_object_section("command_descriptions");
     for (map<string,string>::iterator p = m_as->m_descs.begin();

@@ -1910,6 +1910,12 @@ inline ostream& operator<<(ostream& out, const pg_query_t& q) {
   return out;
 }
 
+#define MODID_APPEND 1
+#define MODID_SETATTRS 2
+#define MODID_DELETE 3
+#define MODID_CREATE 4
+#define MODID_UPDATE_SNAPS 5
+
 class PGBackend;
 class ObjectModDesc {
   bool can_local_rollback;
@@ -1926,13 +1932,13 @@ public:
   };
   void visit(Visitor *visitor) const;
   mutable bufferlist bl;
-  enum ModID {
+  /*enum ModID {
     APPEND = 1,
     SETATTRS = 2,
     DELETE = 3,
     CREATE = 4,
     UPDATE_SNAPS = 5
-  };
+  };*/
   ObjectModDesc() : can_local_rollback(true), rollback_info_completed(false) {}
   void claim(ObjectModDesc &other) {
     bl.clear();
@@ -1961,7 +1967,7 @@ public:
     other.rollback_info_completed = rollback_info_completed;
     rollback_info_completed = temp;
   }
-  void append_id(ModID id) {
+  void append_id(int/*by ketor ModID*/ id) {
     uint8_t _id(id);
     ::encode(_id, bl);
   }
@@ -1969,7 +1975,7 @@ public:
     if (!can_local_rollback || rollback_info_completed)
       return;
     ENCODE_START(1, 1, bl);
-    append_id(APPEND);
+    append_id(MODID_APPEND);
     ::encode(old_size, bl);
     ENCODE_FINISH(bl);
   }
@@ -1977,7 +1983,7 @@ public:
     if (!can_local_rollback || rollback_info_completed)
       return;
     ENCODE_START(1, 1, bl);
-    append_id(SETATTRS);
+    append_id(MODID_SETATTRS);
     ::encode(old_attrs, bl);
     ENCODE_FINISH(bl);
   }
@@ -1985,7 +1991,7 @@ public:
     if (!can_local_rollback || rollback_info_completed)
       return false;
     ENCODE_START(1, 1, bl);
-    append_id(DELETE);
+    append_id(MODID_DELETE);
     ::encode(deletion_version, bl);
     ENCODE_FINISH(bl);
     rollback_info_completed = true;
@@ -1996,14 +2002,14 @@ public:
       return;
     rollback_info_completed = true;
     ENCODE_START(1, 1, bl);
-    append_id(CREATE);
+    append_id(MODID_CREATE);
     ENCODE_FINISH(bl);
   }
   void update_snaps(set<snapid_t> &old_snaps) {
     if (!can_local_rollback || rollback_info_completed)
       return;
     ENCODE_START(1, 1, bl);
-    append_id(UPDATE_SNAPS);
+    append_id(MODID_UPDATE_SNAPS);
     ::encode(old_snaps, bl);
     ENCODE_FINISH(bl);
   }
@@ -2036,42 +2042,50 @@ public:
 };
 WRITE_CLASS_ENCODER(ObjectModDesc)
 
-
+#define OSD_TYPES_MODIFY 1   // some unspecified modification (but not *all* modifications)
+#define OSD_TYPES_CLONE 2    // cloned object from head
+#define OSD_TYPES_DELETE 3   // deleted object
+#define OSD_TYPES_BACKLOG 4  // event invented by generate_backlog [deprecated]
+#define OSD_TYPES_LOST_REVERT 5 // lost new version, revert to an older version.
+#define OSD_TYPES_LOST_DELETE 6 // lost new version, revert to no object (deleted).
+#define OSD_TYPES_LOST_MARK 7   // lost new version, now EIO
+#define OSD_TYPES_PROMOTE 8     // promoted object from another tier
+#define OSD_TYPES_CLEAN 9       // mark an object clean
 /**
  * pg_log_entry_t - single entry/event in pg log
  *
  */
 struct pg_log_entry_t {
-  enum {
-    MODIFY = 1,   // some unspecified modification (but not *all* modifications)
-    CLONE = 2,    // cloned object from head
-    DELETE = 3,   // deleted object
-    BACKLOG = 4,  // event invented by generate_backlog [deprecated]
-    LOST_REVERT = 5, // lost new version, revert to an older version.
-    LOST_DELETE = 6, // lost new version, revert to no object (deleted).
-    LOST_MARK = 7,   // lost new version, now EIO
-    PROMOTE = 8,     // promoted object from another tier
-    CLEAN = 9,       // mark an object clean
-  };
+//  enum {
+//    OSD_TYPES_MODIFY = 1,   // some unspecified modification (but not *all* modifications)
+//    CLONE = 2,    // cloned object from head
+//    DELETE = 3,   // deleted object
+//    BACKLOG = 4,  // event invented by generate_backlog [deprecated]
+//    LOST_REVERT = 5, // lost new version, revert to an older version.
+//    LOST_DELETE = 6, // lost new version, revert to no object (deleted).
+//    LOST_MARK = 7,   // lost new version, now EIO
+//    PROMOTE = 8,     // promoted object from another tier
+//    CLEAN = 9,       // mark an object clean
+//  };
   static const char *get_op_name(int op) {
     switch (op) {
-    case MODIFY:
+    case OSD_TYPES_MODIFY:
       return "modify  ";
-    case PROMOTE:
+    case OSD_TYPES_PROMOTE:
       return "promote ";
-    case CLONE:
+    case OSD_TYPES_CLONE:
       return "clone   ";
-    case DELETE:
+    case OSD_TYPES_DELETE:
       return "delete  ";
-    case BACKLOG:
+    case OSD_TYPES_BACKLOG:
       return "backlog ";
-    case LOST_REVERT:
+    case OSD_TYPES_LOST_REVERT:
       return "l_revert";
-    case LOST_DELETE:
+    case OSD_TYPES_LOST_DELETE:
       return "l_delete";
-    case LOST_MARK:
+    case OSD_TYPES_LOST_MARK:
       return "l_mark  ";
-    case CLEAN:
+    case OSD_TYPES_CLEAN:
       return "clean   ";
     default:
       return "unknown ";
@@ -2108,14 +2122,14 @@ struct pg_log_entry_t {
       reqid(rid), mtime(mt), invalid_hash(false), invalid_pool(false),
       offset(0) {}
       
-  bool is_clone() const { return op == CLONE; }
-  bool is_modify() const { return op == MODIFY; }
-  bool is_promote() const { return op == PROMOTE; }
-  bool is_clean() const { return op == CLEAN; }
-  bool is_backlog() const { return op == BACKLOG; }
-  bool is_lost_revert() const { return op == LOST_REVERT; }
-  bool is_lost_delete() const { return op == LOST_DELETE; }
-  bool is_lost_mark() const { return op == LOST_MARK; }
+  bool is_clone() const { return op == OSD_TYPES_CLONE; }
+  bool is_modify() const { return op == OSD_TYPES_MODIFY; }
+  bool is_promote() const { return op == OSD_TYPES_PROMOTE; }
+  bool is_clean() const { return op == OSD_TYPES_CLEAN; }
+  bool is_backlog() const { return op == OSD_TYPES_BACKLOG; }
+  bool is_lost_revert() const { return op == OSD_TYPES_LOST_REVERT; }
+  bool is_lost_delete() const { return op == OSD_TYPES_LOST_DELETE; }
+  bool is_lost_mark() const { return op == OSD_TYPES_LOST_MARK; }
 
   bool is_update() const {
     return
@@ -2123,11 +2137,11 @@ struct pg_log_entry_t {
       is_backlog() || is_lost_revert() || is_lost_mark();
   }
   bool is_delete() const {
-    return op == DELETE || op == LOST_DELETE;
+    return op == OSD_TYPES_DELETE || op == OSD_TYPES_LOST_DELETE;
   }
       
   bool reqid_is_indexed() const {
-    return reqid != osd_reqid_t() && (op == MODIFY || op == DELETE);
+    return reqid != osd_reqid_t() && (op == OSD_TYPES_MODIFY || op == OSD_TYPES_DELETE);
   }
 
   string get_key_name() const;

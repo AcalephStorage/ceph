@@ -17,7 +17,11 @@
 #include "common/environment.h"
 #include "include/types.h"
 #include "lockdep.h"
-
+#ifdef _WIN32
+#include "crush/hash.h"
+#include <map>
+#include <pthread.h>
+#endif
 #include "include/unordered_map.h"
 #include "include/hash_namespace.h"
 
@@ -90,10 +94,9 @@ void lockdep_unregister_ceph_context(CephContext *cct)
 int lockdep_dump_locks()
 {
   pthread_mutex_lock(&lockdep_mutex);
-
-  for (ceph::unordered_map<pthread_t, map<int,BackTrace*> >::iterator p = held.begin();
-       p != held.end();
-       ++p) {
+#ifndef _WIN32
+  for (ceph::unordered_map<pthread_t, map<int,BackTrace*> >::iterator p = held.begin();p != held.end();++p) 
+  {
     lockdep_dout(0) << "--- thread " << p->first << " ---" << dendl;
     for (map<int,BackTrace*>::iterator q = p->second.begin();
 	 q != p->second.end();
@@ -104,6 +107,7 @@ int lockdep_dump_locks()
       *_dout << dendl;
     }
   }
+#endif
 
   pthread_mutex_unlock(&lockdep_mutex);
   return 0;
@@ -167,6 +171,7 @@ static bool does_follow(int a, int b)
 
 int lockdep_will_lock(const char *name, int id)
 {
+#ifndef _WIN32
   pthread_t p = pthread_self();
   if (id < 0) id = lockdep_register(name);
 
@@ -230,11 +235,13 @@ int lockdep_will_lock(const char *name, int id)
   }
 
   pthread_mutex_unlock(&lockdep_mutex);
+#endif
   return id;
 }
 
 int lockdep_locked(const char *name, int id, bool force_backtrace)
 {
+#ifndef _WIN32
   pthread_t p = pthread_self();
 
   if (id < 0) id = lockdep_register(name);
@@ -246,13 +253,17 @@ int lockdep_locked(const char *name, int id, bool force_backtrace)
   else
     held[p][id] = 0;
   pthread_mutex_unlock(&lockdep_mutex);
+#endif
   return id;
 }
 
 int lockdep_will_unlock(const char *name, int id)
 {
+#ifdef _WIN32
+  void * p = pthread_self().p;
+#else
   pthread_t p = pthread_self();
-
+#endif
   if (id < 0) {
     //id = lockdep_register(name);
     assert(id == -1);
@@ -260,6 +271,7 @@ int lockdep_will_unlock(const char *name, int id)
   }
 
   pthread_mutex_lock(&lockdep_mutex);
+#ifndef _WIN32
   lockdep_dout(20) << "_will_unlock " << name << dendl;
 
   // don't assert.. lockdep may be enabled at any point in time
@@ -268,6 +280,7 @@ int lockdep_will_unlock(const char *name, int id)
 
   delete held[p][id];
   held[p].erase(id);
+#endif
   pthread_mutex_unlock(&lockdep_mutex);
   return id;
 }

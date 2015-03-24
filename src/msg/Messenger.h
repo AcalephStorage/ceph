@@ -31,7 +31,10 @@ using namespace std;
 
 #include <errno.h>
 #include <sstream>
-
+#ifdef _WIN32
+#else
+#define SOCKET_PRIORITY_MIN_DELAY 6
+#endif
 class MDS;
 class Timer;
 
@@ -47,14 +50,20 @@ protected:
   int default_send_priority;
   /// set to true once the Messenger has started, and set to false on shutdown
   bool started;
-
+#ifdef _WIN32
+#else
+  uint32_t magic;
+  int socket_priority;
+#endif
 public:
   /**
    *  The CephContext this Messenger uses. Many other components initialize themselves
    *  from this value.
    */
   CephContext *cct;
-
+#ifdef _WIN32
+  int crcflags;
+#endif
   /**
    * A Policy describes the rules of a Connection. Is there a limit on how
    * much data this Connection can have locally? When the underlying connection
@@ -123,6 +132,7 @@ public:
    * Messenger users should construct full implementations directly,
    * or use the create() function.
    */
+#ifdef _WIN32
   Messenger(CephContext *cct_, entity_name_t w)
     : my_inst(),
       default_send_priority(CEPH_MSG_PRIO_DEFAULT), started(false),
@@ -130,6 +140,18 @@ public:
   {
     my_inst.name = w;
   }
+#else
+  Messenger(CephContext *cct_, entity_name_t w)
+    : my_inst(),
+      default_send_priority(CEPH_MSG_PRIO_DEFAULT), started(false),
+      magic(0),
+      socket_priority(-1),
+      cct(cct_),
+      crcflags(get_default_crc_flags(cct->_conf))
+  {
+    my_inst.name = w;
+  }
+#endif
   virtual ~Messenger() {}
 
   /**
@@ -149,11 +171,9 @@ public:
                            entity_name_t name,
 			   string lname,
                            uint64_t nonce);
-
-  /**
-   * create a anonymous Connection instance
-   */
+#ifdef _WIN32
   virtual Connection *create_anon_connection() = 0;
+#endif
 
   /**
    * @defgroup Accessors
@@ -170,6 +190,11 @@ public:
    * set messenger's instance
    */
   void set_myinst(entity_inst_t i) { my_inst = i; }
+#ifdef _WIN32
+#else
+  uint32_t get_magic() { return magic; }
+  void set_magic(int _magic) { magic = _magic; }
+#endif
   /**
    * Retrieve the Messenger's address.
    *
@@ -181,7 +206,12 @@ protected:
   /**
    * set messenger's address
    */
+#ifdef _WIN32
   void set_myaddr(const entity_addr_t& a) { my_inst.addr = a; }
+
+#else
+  virtual void set_myaddr(const entity_addr_t& a) { my_inst.addr = a; }
+#endif
 public:
   /**
    * Retrieve the Messenger's name.
@@ -221,6 +251,12 @@ public:
    * (0 if the queue is empty)
    */
   virtual double get_dispatch_queue_max_age(utime_t now) = 0;
+  /**
+   * Get the default crc flags for this messenger.
+   * but not yet dispatched.
+   */
+
+  static int get_default_crc_flags(md_config_t *);
 
   /**
    * @} // Accessors
@@ -299,6 +335,30 @@ public:
     assert(!started);
     default_send_priority = p;
   }
+#ifdef _WIN32
+#else
+  /**
+   * Set the priority(SO_PRIORITY) for all packets to be sent on this socket.
+   *
+   * Linux uses this value to order the networking queues: packets with a higher
+   * priority may be processed first depending on the selected device queueing
+   * discipline.
+   *
+   * @param prio The priority. Setting a priority outside the range 0 to 6
+   * requires the CAP_NET_ADMIN capability.
+   */
+  void set_socket_priority(int prio) {
+    socket_priority = prio;
+  }
+  /**
+   * Get the socket priority
+   *
+   * @return the socket priority
+   */
+  int get_socket_priority() {
+    return socket_priority;
+  }
+#endif
   /**
    * Add a new Dispatcher to the front of the list. If you add
    * a Dispatcher which is already included, it will get a duplicate
@@ -670,5 +730,5 @@ public:
 };
 
 
-
 #endif
+

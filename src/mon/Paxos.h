@@ -575,13 +575,31 @@ private:
    *	      fully committed.
    */
   list<Context*> waiting_for_commit;
+
   /**
+   * Pending proposal transaction
    *
+   * This is the transaction that is under construction and pending
+   * proposal.  We will add operations to it until we decide it is
+   * time to start a paxos round.
    */
-  list<Context*> proposals;
+  MonitorDBStore::TransactionRef pending_proposal;
+
   /**
-   * @}
+   * Finishers for pending transaction
+   *
+   * These are waiting for updates in the pending proposal/transaction
+   * to be committed.
    */
+  list<Context*> pending_finishers;
+
+  /**
+   * Finishers for committing transaction
+   *
+   * When the pending_proposal is submitted, pending_finishers move to
+   * this list.  When it commits, these finishers are notified.
+   */
+  list<Context*> committing_finishers;
 
   /**
    * @defgroup Paxos_h_sync_warns Synchronization warnings
@@ -969,7 +987,7 @@ private:
    *
    * @invariant The received message is an operation of type OP_LEASE
    *
-   * @param The message sent by the Leader to the Peon during the
+   * @param lease The message sent by the Leader to the Peon during the
    *	    Paxos::extend_lease function
    */
   void handle_lease(MMonPaxos *lease);
@@ -1046,17 +1064,9 @@ private:
   void warn_on_future_time(utime_t t, entity_name_t from);
 
   /**
-   * Queue a new proposal by pushing it at the back of the queue; do not
-   * propose it.
-   *
-   * @param bl The bufferlist to be proposed
-   * @param onfinished The callback to be called once the proposal finishes
+   * Begin proposing the pending_proposal.
    */
-  void queue_proposal(bufferlist& bl, Context *onfinished);
-  /**
-   * Begin proposing the Proposal at the front of the proposals queue.
-   */
-  void propose_queued();
+  void propose_pending();
 
   /**
    * refresh state from store
@@ -1074,7 +1084,8 @@ private:
 public:
   /**
    * @param m A monitor
-   * @param mid A machine id
+   * @param name A name for the paxos service. It serves as the naming space
+   * of the underlying persistent storage for this service.
    */
   Paxos(Monitor *m, const string &name) 
 		 : mon(m),
@@ -1262,7 +1273,7 @@ public:
    * Check if a given version is readable.
    *
    * A version may not be readable for a myriad of reasons:
-   *  @li the version @v is higher that the last committed version
+   *  @li the version @e v is higher that the last committed version
    *  @li we are not the Leader nor a Peon (election may be on-going)
    *  @li we do not have a committed value yet
    *  @li we do not have a valid lease
@@ -1272,7 +1283,7 @@ public:
    */
   bool is_readable(version_t seen=0);
   /**
-   * Read version @v and store its value in @bl
+   * Read version @e v and store its value in @e bl
    *
    * @param[in] v The version we want to read
    * @param[out] bl The version's value
@@ -1334,22 +1345,30 @@ public:
   }
 
   /**
-   * List all queued proposals
+   * Get a transaction to submit operations to propose against
    *
-   * @param out[out] Output Stream onto which we will output the list
-   *		     of queued proposals.
+   * Apply operations to this transaction.  It will eventually be proposed
+   * to paxos.
    */
-  void list_proposals(ostream& out);
+  MonitorDBStore::TransactionRef get_pending_transaction();
+
   /**
-   * Propose a new value to the Leader.
+   * Queue a completion for the pending proposal
    *
-   * This function enables the submission of a new value to the Leader, which
-   * will trigger a new proposal.
-   *
-   * @param bl A bufferlist holding the value to be proposed
-   * @param onfinish A callback to be fired up once we finish the proposal
+   * This completion will get triggered when the pending proposal
+   * transaction commits.
    */
-  bool propose_new_value(bufferlist& bl, Context *onfinished=0);
+  void queue_pending_finisher(Context *onfinished);
+
+  /**
+   * (try to) trigger a proposal
+   *
+   * Tell paxos that it should submit the pending proposal.  Note that if it
+   * is not active (e.g., because it is already in the midst of committing
+   * something) that will be deferred (e.g., until the current round finishes).
+   */
+  bool trigger_propose();
+
   /**
    * Add oncommit to the back of the list of callbacks waiting for us to
    * finish committing.

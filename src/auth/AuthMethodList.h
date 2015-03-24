@@ -20,7 +20,9 @@
 #include <list>
 #include <set>
 #include <string>
-
+#ifdef _WIN32
+typedef uint32_t __u32;
+#endif
 class CephContext;
 
 class AuthMethodList {

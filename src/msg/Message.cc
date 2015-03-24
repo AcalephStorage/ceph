@@ -65,8 +65,10 @@ using namespace std;
 #include "messages/MOSDOpReply.h"
 #include "messages/MOSDSubOp.h"
 #include "messages/MOSDSubOpReply.h"
+#ifndef _WIN32
 #include "messages/MOSDRepOp.h"
 #include "messages/MOSDRepOpReply.h"
+#endif
 #include "messages/MOSDMap.h"
 #include "messages/MMonGetOSDMap.h"
 
@@ -114,7 +116,9 @@ using namespace std;
 #include "messages/MMDSLoadTargets.h"
 #include "messages/MMDSResolve.h"
 #include "messages/MMDSResolveAck.h"
+#ifndef _WIN32
 #include "messages/MMDSCacheRejoin.h"
+#endif
 #include "messages/MMDSFindIno.h"
 #include "messages/MMDSFindInoReply.h"
 #include "messages/MMDSOpenIno.h"
@@ -146,15 +150,15 @@ using namespace std;
 #include "messages/MDentryLink.h"
 
 #include "messages/MHeartbeat.h"
-
+#ifndef _WIN32
 #include "messages/MMDSTableRequest.h"
-
+#endif
 //#include "messages/MInodeUpdate.h"
 #include "messages/MCacheExpire.h"
 #include "messages/MInodeFileCaps.h"
-
+#ifndef _WIN32
 #include "messages/MLock.h"
-
+#endif
 #include "messages/MWatchNotify.h"
 #include "messages/MTimeCheck.h"
 
@@ -163,11 +167,12 @@ using namespace std;
 #include "messages/MOSDPGPush.h"
 #include "messages/MOSDPGPushReply.h"
 #include "messages/MOSDPGPull.h"
-
+#ifndef _WIN32
 #include "messages/MOSDECSubOpWrite.h"
 #include "messages/MOSDECSubOpWriteReply.h"
 #include "messages/MOSDECSubOpRead.h"
 #include "messages/MOSDECSubOpReadReply.h"
+#endif
 
 #define DEBUGLVL  10    // debug level of output
 
@@ -250,7 +255,10 @@ Message *decode_message(CephContext *cct, ceph_msg_header& header, ceph_msg_foot
 			bufferlist& front, bufferlist& middle, bufferlist& data)
 {
   // verify crc
-  if (!cct || !cct->_conf->ms_nocrc) {
+#ifndef _WIN32
+  if (!cct || !cct->_conf->ms_nocrc)
+#endif
+  {
     __u32 front_crc = front.crc32c(0);
     __u32 middle_crc = middle.crc32c(0);
 
@@ -421,13 +429,14 @@ Message *decode_message(CephContext *cct, ceph_msg_header& header, ceph_msg_foot
   case MSG_OSD_SUBOPREPLY:
     m = new MOSDSubOpReply();
     break;
+#ifndef _WIN32
   case MSG_OSD_REPOP:
     m = new MOSDRepOp();
     break;
   case MSG_OSD_REPOPREPLY:
     m = new MOSDRepOpReply();
     break;
-
+#endif
   case CEPH_MSG_OSD_MAP:
     m = new MOSDMap;
     break;
@@ -485,6 +494,7 @@ Message *decode_message(CephContext *cct, ceph_msg_header& header, ceph_msg_foot
   case MSG_OSD_PG_PUSH_REPLY:
     m = new MOSDPGPushReply;
     break;
+#ifndef _WIN32
   case MSG_OSD_EC_WRITE:
     m = new MOSDECSubOpWrite;
     break;
@@ -497,6 +507,7 @@ Message *decode_message(CephContext *cct, ceph_msg_header& header, ceph_msg_foot
   case MSG_OSD_EC_READ_REPLY:
     m = new MOSDECSubOpReadReply;
     break;
+#endif
    // auth
   case CEPH_MSG_AUTH:
     m = new MAuth;
@@ -567,9 +578,11 @@ Message *decode_message(CephContext *cct, ceph_msg_header& header, ceph_msg_foot
   case MSG_MDS_RESOLVEACK:
     m = new MMDSResolveAck;
     break;
+#ifndef _WIN32
   case MSG_MDS_CACHEREJOIN:
     m = new MMDSCacheRejoin;
 	break;
+#endif
 	/*
   case MSG_MDS_CACHEREJOINACK:
 	m = new MMDSCacheRejoinAck;
@@ -666,11 +679,11 @@ Message *decode_message(CephContext *cct, ceph_msg_header& header, ceph_msg_foot
   case MSG_MDS_CACHEEXPIRE:
     m = new MCacheExpire();
     break;
-
-  case MSG_MDS_TABLE_REQUEST:
+#ifndef _WIN32
+   case MSG_MDS_TABLE_REQUEST:
     m = new MMDSTableRequest;
     break;
-
+#endif
 	/*  case MSG_MDS_INODEUPDATE:
     m = new MInodeUpdate();
     break;
@@ -679,11 +692,11 @@ Message *decode_message(CephContext *cct, ceph_msg_header& header, ceph_msg_foot
   case MSG_MDS_INODEFILECAPS:
     m = new MInodeFileCaps();
     break;
-
+#ifndef _WIN32
   case MSG_MDS_LOCK:
     m = new MLock();
     break;
-
+#endif
   case MSG_TIMECHECK:
     m = new MTimeCheck();
     break;

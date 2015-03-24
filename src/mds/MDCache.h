@@ -72,6 +72,33 @@ struct MDRequestImpl;
 typedef ceph::shared_ptr<MDRequestImpl> MDRequestRef;
 struct MDSlaveUpdate;
 
+enum {
+  l_mdc_first = 3000,
+  // How many dentries are currently in stray dirs
+  l_mdc_num_strays,
+  // How many stray dentries are currently being purged
+  l_mdc_num_strays_purging,
+  // How many stray dentries are currently delayed for purge due to refs
+  l_mdc_num_strays_delayed,
+  // How many dentries have ever been added to stray dir
+  l_mdc_strays_created,
+  // How many dentries have ever finished purging from stray dir
+  l_mdc_strays_purged,
+
+  // How many inode sizes currently being recovered
+  l_mdc_num_recovering_processing,
+  // How many inodes currently waiting to have size recovered
+  l_mdc_num_recovering_enqueued,
+  // How many inodes waiting with elevated priority for recovery
+  l_mdc_num_recovering_prioritized,
+  // How many inodes ever started size recovery
+  l_mdc_recovery_started,
+  // How many inodes ever completed size recovery
+  l_mdc_recovery_completed,
+
+  l_mdc_last,
+};
+
 
 // flags for predirty_journal_parents()
 static const int PREDIRTY_PRIMARY = 1; // primary dn, adjust nested accounting
@@ -102,6 +129,8 @@ class MDCache {
 
   set<CInode*> base_inodes;
 
+  PerfCounters *logger;
+
 public:
   void advance_stray() {
     stray_index = (stray_index+1)%NUM_STRAY;
@@ -114,10 +143,16 @@ public:
   int num_inodes_with_caps;
   int num_caps;
 
+  uint64_t num_strays;
+  uint64_t num_strays_purging;
+  uint64_t num_strays_delayed;
+
   unsigned max_dir_commit_size;
 
   ceph_file_layout default_file_layout;
   ceph_file_layout default_log_layout;
+
+  void register_perfcounters();
 
   // -- client leases --
 public:
@@ -276,7 +311,8 @@ public:
 			  CInode **pcow_inode=0);
   void journal_dirty_inode(MutationImpl *mut, EMetaBlob *metablob, CInode *in, snapid_t follows=CEPH_NOSNAP);
 
-  void project_rstat_inode_to_frag(CInode *cur, CDir *parent, snapid_t first, int linkunlink);
+  void project_rstat_inode_to_frag(CInode *cur, CDir *parent, snapid_t first,
+				   int linkunlink, SnapRealm *prealm);
   void _project_rstat_inode_to_frag(inode_t& inode, snapid_t ofirst, snapid_t last,
 				    CDir *parent, int linkunlink=0);
   void project_rstat_frag_to_inode(nest_info_t& rstat, nest_info_t& accounted_rstat,
@@ -872,14 +908,14 @@ public:
 	dn->get_dir()->get_inode()->is_stray())
       eval_stray(dn, delay);
   }
-  void try_remove_dentries_for_stray(CInode* diri);
 
   void fetch_backtrace(inodeno_t ino, int64_t pool, bufferlist& bl, Context *fin);
 
 protected:
   void scan_stray_dir(dirfrag_t next=dirfrag_t());
+  void truncate_stray(CDentry *dn);
   void purge_stray(CDentry *dn);
-  void _purge_stray_purged(CDentry *dn, int r=0);
+  void _purge_stray_purged(CDentry *dn, bool only_head);
   void _purge_stray_logged(CDentry *dn, version_t pdv, LogSegment *ls);
   void _purge_stray_logged_truncate(CDentry *dn, LogSegment *ls);
   friend struct C_MDC_RetryScanStray;

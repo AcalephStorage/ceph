@@ -17,7 +17,7 @@
 #ifndef CEPH_REPLICATEDPG_H
 #define CEPH_REPLICATEDPG_H
 
-#include <boost/optional.hpp>
+#include <boost/optional/optional_io.hpp>
 #include <boost/tuple/tuple.hpp>
 
 #include "include/assert.h" 
@@ -126,6 +126,11 @@ public:
     uint32_t flags;    // object_copy_data_t::FLAG_*
     uint32_t source_data_digest, source_omap_digest;
     uint32_t data_digest, omap_digest;
+#ifdef _WIN32
+    vector<osd_reqid_t> reqids;
+#else
+    vector<pair<osd_reqid_t, version_t> > reqids; // [(reqid, user_version)]
+#endif
     bool is_data_digest() {
       return flags & object_copy_data_t::FLAG_DATA_DIGEST;
     }
@@ -322,8 +327,10 @@ public:
     osd->send_message_osd_cluster(to_osd, m, get_osdmap()->get_epoch());
   }
   void queue_transaction(ObjectStore::Transaction *t, OpRequestRef op) {
+#ifdef _WIN32
     list<ObjectStore::Transaction *> tls;
     tls.push_back(t);
+#endif
     osd->store->queue_transaction(osr.get(), t, 0, 0, 0, op);
   }
   epoch_t get_epoch() const {
@@ -368,13 +375,33 @@ public:
   const pg_pool_t &get_pool() const {
     return pool.info;
   }
+  map<pg_shard_t, const pg_missing_t *> get_all_missing() const {
+    map<pg_shard_t, const pg_missing_t *> all_missing;
+    all_missing[pg_whoami] = &(pg_log.get_missing());
+    for (map<pg_shard_t, pg_missing_t>::const_iterator i = peer_missing.begin();
+	 i != peer_missing.end();
+	 ++i) {
+      all_missing[i->first] = &(i->second);
+    }
+    return all_missing;
+  }
+  const map<pg_shard_t, const pg_info_t *> get_all_info() const {
+    map<pg_shard_t, const pg_info_t *> all_info;
+    all_info[pg_whoami] = &info;
+    for (map<pg_shard_t, pg_info_t>::const_iterator i = peer_info.begin();
+	 i != peer_info.end();
+	 ++i) {
+      all_info[i->first] = &(i->second);
+    }
+    return all_info;
+  }
   ObjectContextRef get_obc(
     const hobject_t &hoid,
     map<string, bufferlist> &attrs) {
     return get_object_context(hoid, true, &attrs);
   }
   void log_operation(
-    vector<pg_log_entry_t> &logv,
+    const vector<pg_log_entry_t> &logv,
     boost::optional<pg_hit_set_history_t> &hset_history,
     const eversion_t &trim_to,
     const eversion_t &trim_rollback_to,
@@ -396,11 +423,13 @@ public:
     if (peer == get_primary())
       return true;
     assert(peer_info.count(peer));
-    bool should_send = hoid.pool != (int64_t)info.pgid.pool() ||
+    bool should_send_backfill = hoid.pool != (int64_t)info.pgid.pool() ||
       hoid <= MAX(last_backfill_started, peer_info[peer].last_backfill);
-    if (!should_send)
+    if (!should_send_backfill)
       assert(is_backfill_targets(peer));
-    return should_send;
+
+    assert(peer_missing.count(peer));
+    return should_send_backfill && !peer_missing[peer].is_missing(hoid);
   }
   
   void update_peer_last_complete_ondisk(
@@ -478,6 +507,7 @@ public:
     bool undirty;         // user explicitly un-dirtying this object
     bool cache_evict;     ///< true if this is a cache eviction
     bool ignore_cache;    ///< true if IGNORE_CACHE flag is set
+    bool ignore_log_op_stats;  // don't log op stats
 
     // side effects
     list<pair<watch_info_t,bool> > watch_connects; ///< new watch + will_ping flag
@@ -530,7 +560,11 @@ public:
 
     int num_read;    ///< count read ops
     int num_write;   ///< count update ops
-
+#ifdef _WIN32
+    vector<osd_reqid_t> extra_reqids;
+#else
+    vector<pair<osd_reqid_t, version_t> > extra_reqids;
+#endif
     CopyFromCallback *copy_cb;
 
     hobject_t new_temp_oid, discard_temp_oid;  ///< temp objects we should start/stop tracking
@@ -575,7 +609,7 @@ public:
 
     ObjectModDesc mod_desc;
 
-    enum { W_LOCK, R_LOCK, NONE } lock_to_release;
+    enum { W_LOCK, R_LOCK, E_LOCK, NONE } lock_to_release;
 
     Context *on_finish;
 
@@ -592,7 +626,7 @@ public:
       snapset(0),
       new_obs(obs->oi, obs->exists),
       modify(false), user_modify(false), undirty(false), cache_evict(false),
-      ignore_cache(false),
+      ignore_cache(false), ignore_log_op_stats(false),
       bytes_written(0), bytes_read(0), user_at_version(0),
       current_osd_subop_num(0),
       op_t(NULL),
@@ -615,6 +649,7 @@ public:
               vector<OSDOp>& _ops, ReplicatedPG *_pg) :
       op(_op), reqid(_reqid), ops(_ops), obs(NULL), snapset(0),
       modify(false), user_modify(false), undirty(false), cache_evict(false),
+      ignore_cache(false), ignore_log_op_stats(false),
       bytes_written(0), bytes_read(0), user_at_version(0),
       current_osd_subop_num(0),
       op_t(NULL),
@@ -729,48 +764,40 @@ protected:
    * @param ctx [in,out] ctx to get locks for
    * @return true on success, false if we are queued
    */
-  bool get_rw_locks(OpContext *ctx) {
+  bool get_rw_locks(bool write_ordered, OpContext *ctx) {
     /* If snapset_obc, !obc->obs->exists and we will always take the
      * snapdir lock *before* the head lock.  Since all callers will do
      * this (read or write) if we get the first we will be guaranteed
      * to get the second.
      */
-    if (ctx->snapset_obc) {
-      assert(!ctx->obc->obs.exists);
-      if (ctx->op->may_write() || ctx->op->may_cache()) {
-	if (ctx->snapset_obc->get_write(ctx->op)) {
-	  ctx->release_snapset_obc = true;
-	  ctx->lock_to_release = OpContext::W_LOCK;
-	} else {
-	  return false;
-	}
-      } else {
-	assert(ctx->op->may_read());
-	if (ctx->snapset_obc->get_read(ctx->op)) {
-	  ctx->release_snapset_obc = true;
-	  ctx->lock_to_release = OpContext::R_LOCK;
-	} else {
-	  return false;
-	}
-      }
-    }
-    if (ctx->op->may_write() || ctx->op->may_cache()) {
-      if (ctx->obc->get_write(ctx->op)) {
-	ctx->lock_to_release = OpContext::W_LOCK;
-	return true;
-      } else {
-	assert(!ctx->snapset_obc);
-	return false;
-      }
+    ObjectContext::RWState::State type = ObjectContext::RWState::RWNONE;
+    if (write_ordered && ctx->op->may_read()) {
+      type = ObjectContext::RWState::RWEXCL;
+      ctx->lock_to_release = OpContext::E_LOCK;
+    } else if (write_ordered) {
+      type = ObjectContext::RWState::RWWRITE;
+      ctx->lock_to_release = OpContext::W_LOCK;
     } else {
       assert(ctx->op->may_read());
-      if (ctx->obc->get_read(ctx->op)) {
-	ctx->lock_to_release = OpContext::R_LOCK;
-	return true;
+      type = ObjectContext::RWState::RWREAD;
+      ctx->lock_to_release = OpContext::R_LOCK;
+    }
+
+    if (ctx->snapset_obc) {
+      assert(!ctx->obc->obs.exists);
+      if (ctx->snapset_obc->get_lock_type(ctx->op, type)) {
+	ctx->release_snapset_obc = true;
       } else {
-	assert(!ctx->snapset_obc);
+	ctx->lock_to_release = OpContext::NONE;
 	return false;
       }
+    }
+    if (ctx->obc->get_lock_type(ctx->op, type)) {
+      return true;
+    } else {
+      assert(!ctx->snapset_obc);
+      ctx->lock_to_release = OpContext::NONE;
+      return false;
     }
   }
 
@@ -810,6 +837,24 @@ protected:
 	ctx->release_snapset_obc = false;
       }
       ctx->obc->put_write(
+	&to_req,
+	&requeue_recovery,
+	&requeue_snaptrimmer);
+      if (ctx->clone_obc)
+	ctx->clone_obc->put_write(
+	  &to_req,
+	  &requeue_recovery_clone,
+	  &requeue_snaptrimmer_clone);
+      break;
+    case OpContext::E_LOCK:
+      if (ctx->snapset_obc && ctx->release_snapset_obc) {
+	ctx->snapset_obc->put_excl(
+	  &to_req,
+	  &requeue_recovery_snapset,
+	  &requeue_snaptrimmer_snapset);
+	ctx->release_snapset_obc = false;
+      }
+      ctx->obc->put_excl(
 	&to_req,
 	&requeue_recovery,
 	&requeue_snaptrimmer);
@@ -941,7 +986,7 @@ protected:
   friend struct C_OnPushCommit;
 
   // projected object info
-  SharedPtrRegistry<hobject_t, ObjectContext> object_contexts;
+  SharedLRU<hobject_t, ObjectContext> object_contexts;
   // map from oid.snapdir() to SnapSetContext *
   map<hobject_t, SnapSetContext*> snapset_contexts;
   Mutex snapset_contexts_lock;
@@ -974,7 +1019,7 @@ protected:
       pg(p), obc(o) {}
     void finish(int r) {
       pg->object_context_destructor_callback(obc);
-     }
+    }
   };
 
   int find_object_context(const hobject_t& oid,
@@ -1132,7 +1177,7 @@ protected:
   /**
    * This helper function tells the client to redirect their request elsewhere.
    */
-  void do_cache_redirect(OpRequestRef op, ObjectContextRef obc);
+  void do_cache_redirect(OpRequestRef op);
   /**
    * This function starts up a copy from
    */
@@ -1144,7 +1189,7 @@ protected:
   /**
    * Check if the op is such that we can skip promote (e.g., DELETE)
    */
-  bool can_skip_promote(OpRequestRef op, ObjectContextRef obc);
+  bool can_skip_promote(OpRequestRef op);
 
   int prepare_transaction(OpContext *ctx);
   list<pair<OpRequestRef, OpContext*> > in_progress_async_reads;
@@ -1322,7 +1367,13 @@ protected:
   // -- scrub --
   virtual bool _range_available_for_scrub(
     const hobject_t &begin, const hobject_t &end);
+#ifdef _WIN32
   virtual void _scrub(ScrubMap& map);
+#else
+  virtual void _scrub(
+    ScrubMap &map,
+    const std::map<hobject_t, pair<uint32_t, uint32_t> > &missing_digest);
+#endif
   void _scrub_digest_updated();
   virtual void _scrub_clear_state();
   virtual void _scrub_finish();
@@ -1462,6 +1513,11 @@ private:
 
   int _verify_no_head_clones(const hobject_t& soid,
 			     const SnapSet& ss);
+#ifndef _WIN32
+  // return true if we're creating a local object, false for a
+  // whiteout or no change.
+  bool maybe_create_new_object(OpContext *ctx);
+#enduf
   int _delete_oid(OpContext *ctx, bool no_whiteout);
   int _rollback_to(OpContext *ctx, ceph_osd_op& op);
 public:
@@ -1472,8 +1528,16 @@ public:
   }
   void wait_for_unreadable_object(const hobject_t& oid, OpRequestRef op);
   void wait_for_all_missing(OpRequestRef op);
-
+#ifdef _WIN32
   bool is_degraded_object(const hobject_t& oid);
+#else
+  bool is_degraded_or_backfilling_object(const hobject_t& oid);
+
+  /* true if the object is missing on any peer, *healthy_copies will be
+   * set to the number of complete peers not missing the object
+   */
+  bool is_degraded_object(const hobject_t &oid, int *healthy_copies);
+#endif
   void wait_for_degraded_object(const hobject_t& oid, OpRequestRef op);
 
   bool maybe_await_blocked_snapset(const hobject_t &soid, OpRequestRef op);

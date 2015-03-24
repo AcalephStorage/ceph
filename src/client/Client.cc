@@ -21,13 +21,19 @@
 #include <sys/stat.h>
 #include <sys/param.h>
 #include <fcntl.h>
+ 
+#ifdef _WIN32
+#define	EDQUOT		122
+#else
 #include <sys/utsname.h>
+#include <sys/statvfs.h>
+#endif
 
 #if defined(__linux__)
 #include <linux/falloc.h>
 #endif
 
-#include <sys/statvfs.h>
+
 
 #include <iostream>
 using namespace std;
@@ -99,8 +105,57 @@ using namespace std;
 #ifndef O_RSYNC
 #define O_RSYNC 0x0
 #endif
+#ifdef _WIN32
+/* for posix fcntl() and lockf() */
+#ifndef F_RDLCK
+#define F_RDLCK		0
+#define F_WRLCK		1
+#define F_UNLCK		2
+#endif
 
+/* operations for bsd flock(), also used by the kernel implementation */
+#define LOCK_SH		1	/* shared lock */
+#define LOCK_EX		2	/* exclusive lock */
+#define LOCK_NB		4	/* or'd with one of the above to prevent
+				   blocking */
+#define LOCK_UN		8	/* remove lock */
 
+#define LOCK_MAND	32	/* This is a mandatory flock ... */
+#define LOCK_READ	64	/* which allows concurrent read operations */
+#define LOCK_WRITE	128	/* which allows concurrent write operations */
+#define LOCK_RW		192	/* which allows concurrent read & write ops */
+
+typedef long		__kernel_off_t;
+typedef int		__kernel_pid_t;
+
+struct flock {
+	short	l_type;
+	short	l_whence;
+	__kernel_off_t	l_start;
+	__kernel_off_t	l_len;
+	__kernel_pid_t	l_pid;
+};
+
+int geteuid()
+{
+	return 0;
+}
+
+int getegid()
+{
+	return 0;
+}
+
+int getuid()
+{
+	return 0;
+}
+
+int getgid()
+{
+	return 0;
+}
+#endif
 
 void client_flush_set_callback(void *p, ObjectCacher::ObjectSet *oset)
 {
@@ -119,9 +174,13 @@ Client::CommandHook::CommandHook(Client *client) :
 bool Client::CommandHook::call(std::string command, cmdmap_t& cmdmap,
 			       std::string format, bufferlist& out)
 {
-  Formatter *f = new_formatter(format);
+#ifdef _WIN32
+Formatter *f = new_formatter(format);
   if (!f)
     f = new_formatter("json-pretty");
+#else
+  Formatter *f = Formatter::create(format);
+#endif
   f->open_object_section("result");
   m_client->client_lock.Lock();
   if (command == "mds_requests")
@@ -793,15 +852,15 @@ Inode * Client::add_update_inode(InodeStat *st, utime_t from,
     if ((issued & CEPH_CAP_LINK_EXCL) == 0) {
       in->nlink = st->nlink;
     }
-
-    if ((in->xattr_version  == 0 || !(issued & CEPH_CAP_XATTR_EXCL)) &&
+#ifdef _WIN32
+if ((in->xattr_version  == 0 || !(issued & CEPH_CAP_XATTR_EXCL)) &&
 	st->xattrbl.length() &&
 	st->xattr_version > in->xattr_version) {
       bufferlist::iterator p = st->xattrbl.begin();
       ::decode(in->xattrs, p);
       in->xattr_version = st->xattr_version;
     }
-
+#endif
     in->dirstat = st->dirstat;
     in->rstat = st->rstat;
 
@@ -824,7 +883,16 @@ Inode * Client::add_update_inode(InodeStat *st, utime_t from,
     in->inline_data = st->inline_data;
     in->inline_version = st->inline_version;
   }
-
+#ifdef _WIN32
+#else
+  if ((in->xattr_version  == 0 || !(issued & CEPH_CAP_XATTR_EXCL)) &&
+      st->xattrbl.length() &&
+      st->xattr_version > in->xattr_version) {
+    bufferlist::iterator p = st->xattrbl.begin();
+    ::decode(in->xattrs, p);
+    in->xattr_version = st->xattr_version;
+  }
+#endif
   // move me if/when version reflects fragtree changes.
   if (in->dirfragtree != st->dirfragtree) {
     in->dirfragtree = st->dirfragtree;
@@ -1723,6 +1791,8 @@ MetaSession *Client::_get_or_open_mds_session(mds_rank_t mds)
 void Client::populate_metadata()
 {
   // Hostname
+#ifdef _WIN32
+#else
   struct utsname u;
   int r = uname(&u);
   if (r >= 0) {
@@ -1731,7 +1801,7 @@ void Client::populate_metadata()
   } else {
     ldout(cct, 1) << __func__ << " failed to read hostname (" << cpp_strerror(r) << ")" << dendl;
   }
-
+#endif
   // Ceph entity id (the '0' in "client.0")
   metadata["entity_id"] = cct->_conf->name.get_id();
 
@@ -1927,7 +1997,11 @@ MClientRequest* Client::build_client_request(MetaRequest *request)
   req->set_filepath(request->get_filepath());
   req->set_filepath2(request->get_filepath2());
   req->set_data(request->data);
+#ifdef _WIN32
   req->set_retry_attempt(request->retry_attempt);
+#else
+  req->set_retry_attempt(request->retry_attempt++);
+#endif
   req->head.num_fwd = request->num_fwd;
   return req;
 }
@@ -2253,6 +2327,7 @@ void Client::handle_mds_map(MMDSMap* m)
 
     if (newstate >= MDSMap::STATE_ACTIVE) {
       if (oldstate < MDSMap::STATE_ACTIVE) {
+	// kick new requests
 	kick_requests(p->second);
 	kick_flushing_caps(p->second);
 	signal_context_list(p->second->waiting_for_open);
@@ -2346,6 +2421,13 @@ void Client::kick_requests(MetaSession *session)
   for (map<ceph_tid_t, MetaRequest*>::iterator p = mds_requests.begin();
        p != mds_requests.end();
        ++p) {
+#ifdef _WIN32
+#else
+    if (p->second->got_unsafe)
+      continue;
+    if (p->second->retry_attempt > 0)
+      continue; // new requests only
+#endif
     if (p->second->mds == session->mds_num) {
       send_request(p->second, session);
     }
@@ -2358,6 +2440,22 @@ void Client::resend_unsafe_requests(MetaSession *session)
        !iter.end();
        ++iter)
     send_request(*iter, session);
+#ifdef _WIN32
+#else
+  // also re-send old requests when MDS enters reconnect stage. So that MDS can
+  // process completed requests in clientreplay stage.
+  for (map<ceph_tid_t, MetaRequest*>::iterator p = mds_requests.begin();
+       p != mds_requests.end();
+       ++p) {
+    MetaRequest *req = p->second;
+    if (req->got_unsafe)
+      continue;
+    if (req->retry_attempt == 0)
+      continue; // old requests only
+    if (req->mds == session->mds_num)
+      send_request(req, session);
+  }
+#endif
 }
 
 void Client::kick_requests_closed(MetaSession *session)
@@ -3695,6 +3793,13 @@ void Client::put_snap_realm(SnapRealm *realm)
 		 << " " << realm->nref << " -> " << (realm->nref - 1) << dendl;
   if (--realm->nref == 0) {
     snap_realms.erase(realm->ino);
+#ifdef _WIN32
+#else
+    if (realm->pparent) {
+      realm->pparent->pchildren.erase(realm);
+      put_snap_realm(realm->pparent);
+    }
+#endif
     delete realm;
   }
 }
@@ -4786,7 +4891,11 @@ void Client::flush_cap_releases()
 void Client::tick()
 {
   if (cct->_conf->client_debug_inject_tick_delay > 0) {
+#ifdef _WIN32
+Sleep(cct->_conf->client_debug_inject_tick_delay * 1000);
+#else
     sleep(cct->_conf->client_debug_inject_tick_delay);
+#endif
     assert(0 == cct->_conf->set_val("client_debug_inject_tick_delay", "0"));
     cct->_conf->apply_changes(NULL);
   }
@@ -5321,9 +5430,13 @@ int Client::_getattr(Inode *in, int mask, int uid, int gid, bool force)
   ldout(cct, 10) << "_getattr result=" << res << dendl;
   return res;
 }
-
+#ifdef _WIN32
+int Client::_setattr(Inode *in, struct stat_ceph *attr, int mask, int uid, int gid,
+		     Inode **inp)
+#else
 int Client::_setattr(Inode *in, struct stat *attr, int mask, int uid, int gid,
 		     Inode **inp)
+#endif
 {
   int issued = in->caps_issued();
 
@@ -5443,8 +5556,11 @@ int Client::_setattr(Inode *in, struct stat *attr, int mask, int uid, int gid,
   ldout(cct, 10) << "_setattr result=" << res << dendl;
   return res;
 }
-
+#ifdef _WIN32
+int Client::setattr(const char *relpath, struct stat_ceph *attr, int mask)
+#else
 int Client::setattr(const char *relpath, struct stat *attr, int mask)
+#endif
 {
   Mutex::Locker lock(client_lock);
   tout(cct) << "setattr" << std::endl;
@@ -5458,8 +5574,11 @@ int Client::setattr(const char *relpath, struct stat *attr, int mask)
     return r;
   return _setattr(in, attr, mask); 
 }
-
+#ifdef _WIN32
+int Client::fsetattr(int fd, struct stat_ceph *attr, int mask)
+#else
 int Client::fsetattr(int fd, struct stat *attr, int mask)
+#endif
 {
   Mutex::Locker lock(client_lock);
   tout(cct) << "fsetattr" << std::endl;
@@ -5469,11 +5588,19 @@ int Client::fsetattr(int fd, struct stat *attr, int mask)
   Fh *f = get_filehandle(fd);
   if (!f)
     return -EBADF;
+#if defined(__linux__) && defined(O_PATH)
+  if (f->flags & O_PATH)
+    return -EBADF;
+#endif
   return _setattr(f->inode, attr, mask); 
 }
-
+#ifdef _WIN32
+int Client::stat(const char *relpath, struct stat_ceph *stbuf,
+			  frag_info_t *dirstat, int mask)
+#else
 int Client::stat(const char *relpath, struct stat *stbuf,
 			  frag_info_t *dirstat, int mask)
+#endif
 {
   ldout(cct, 3) << "stat enter (relpath " << relpath << " mask " << mask << ")" << dendl;
   Mutex::Locker lock(client_lock);
@@ -5493,9 +5620,13 @@ int Client::stat(const char *relpath, struct stat *stbuf,
   ldout(cct, 3) << "stat exit (relpath " << relpath << " mask " << mask << ")" << dendl;
   return r;
 }
-
+#ifdef _WIN32
+int Client::lstat(const char *relpath, struct stat_ceph *stbuf,
+			  frag_info_t *dirstat, int mask)
+#else
 int Client::lstat(const char *relpath, struct stat *stbuf,
 			  frag_info_t *dirstat, int mask)
+#endif
 {
   ldout(cct, 3) << "lstat enter (relpath " << relpath << " mask " << mask << ")" << dendl;
   Mutex::Locker lock(client_lock);
@@ -5516,13 +5647,20 @@ int Client::lstat(const char *relpath, struct stat *stbuf,
   ldout(cct, 3) << "lstat exit (relpath " << relpath << " mask " << mask << ")" << dendl;
   return r;
 }
-
+#ifdef _WIN32
+int Client::fill_stat(Inode *in, struct stat_ceph *st, frag_info_t *dirstat, nest_info_t *rstat)
+#else
 int Client::fill_stat(Inode *in, struct stat *st, frag_info_t *dirstat, nest_info_t *rstat)
+#endif
 {
   ldout(cct, 10) << "fill_stat on " << in->ino << " snap/dev" << in->snapid
 	   << " mode 0" << oct << in->mode << dec
 	   << " mtime " << in->mtime << " ctime " << in->ctime << dendl;
+#ifdef _WIN32
+  memset(st, 0, sizeof(struct stat_ceph));
+#else
   memset(st, 0, sizeof(struct stat));
+#endif
   st->st_ino = in->ino;
   st->st_dev = in->snapid;
   st->st_mode = in->mode;
@@ -5575,7 +5713,11 @@ int Client::chmod(const char *relpath, mode_t mode)
   int r = path_walk(path, &in);
   if (r < 0)
     return r;
+#ifdef _WIN32
+  struct stat_ceph attr;
+#else
   struct stat attr;
+#endif
   attr.st_mode = mode;
   return _setattr(in, &attr, CEPH_SETATTR_MODE);
 }
@@ -5589,7 +5731,15 @@ int Client::fchmod(int fd, mode_t mode)
   Fh *f = get_filehandle(fd);
   if (!f)
     return -EBADF;
+#if defined(__linux__) && defined(O_PATH)
+  if (f->flags & O_PATH)
+    return -EBADF;
+#endif
+#ifdef _WIN32
+  struct stat_ceph attr;
+#else
   struct stat attr;
+#endif
   attr.st_mode = mode;
   return _setattr(f->inode, &attr, CEPH_SETATTR_MODE);
 }
@@ -5606,7 +5756,11 @@ int Client::lchmod(const char *relpath, mode_t mode)
   int r = path_walk(path, &in, false);
   if (r < 0)
     return r;
+#ifdef _WIN32
+  struct stat_ceph attr;
+#else
   struct stat attr;
+#endif
   attr.st_mode = mode;
   return _setattr(in, &attr, CEPH_SETATTR_MODE);
 }
@@ -5623,7 +5777,11 @@ int Client::chown(const char *relpath, int uid, int gid)
   int r = path_walk(path, &in);
   if (r < 0)
     return r;
+#ifdef _WIN32
+  struct stat_ceph attr;
+#else
   struct stat attr;
+#endif
   attr.st_uid = uid;
   attr.st_gid = gid;
   int mask = 0;
@@ -5642,7 +5800,15 @@ int Client::fchown(int fd, int uid, int gid)
   Fh *f = get_filehandle(fd);
   if (!f)
     return -EBADF;
+#if defined(__linux__) && defined(O_PATH)
+  if (f->flags & O_PATH)
+    return -EBADF;
+#endif
+#ifdef _WIN32
+  struct stat_ceph attr;
+#else
   struct stat attr;
+#endif
   attr.st_uid = uid;
   attr.st_gid = gid;
   int mask = 0;
@@ -5664,7 +5830,11 @@ int Client::lchown(const char *relpath, int uid, int gid)
   int r = path_walk(path, &in, false);
   if (r < 0)
     return r;
+#ifdef _WIN32
+  struct stat_ceph attr;
+#else
   struct stat attr;
+#endif
   attr.st_uid = uid;
   attr.st_gid = gid;
   int mask = 0;
@@ -5685,7 +5855,11 @@ int Client::utime(const char *relpath, struct utimbuf *buf)
   int r = path_walk(path, &in);
   if (r < 0)
     return r;
+#ifdef _WIN32
+  struct stat_ceph attr;
+#else
   struct stat attr;
+#endif
   stat_set_mtime_sec(&attr, buf->modtime);
   stat_set_mtime_nsec(&attr, 0);
   stat_set_atime_sec(&attr, buf->actime);
@@ -5706,7 +5880,11 @@ int Client::lutime(const char *relpath, struct utimbuf *buf)
   int r = path_walk(path, &in, false);
   if (r < 0)
     return r;
+#ifdef _WIN32
+  struct stat_ceph attr;
+#else
   struct stat attr;
+#endif
   stat_set_mtime_sec(&attr, buf->modtime);
   stat_set_mtime_nsec(&attr, 0);
   stat_set_atime_sec(&attr, buf->actime);
@@ -5823,6 +6001,8 @@ void Client::fill_dirent(struct dirent *de, const char *name, int type, uint64_t
 {
   strncpy(de->d_name, name, 255);
   de->d_name[255] = '\0';
+#ifdef _WIN32
+#else
 #ifndef __CYGWIN__
   de->d_ino = ino;
 #if !defined(DARWIN) && !defined(__FreeBSD__)
@@ -5832,6 +6012,7 @@ void Client::fill_dirent(struct dirent *de, const char *name, int type, uint64_t
   de->d_type = IFTODT(type);
   ldout(cct, 10) << "fill_dirent '" << de->d_name << "' -> " << inodeno_t(de->d_ino)
 	   << " type " << (int)de->d_type << " w/ next_off " << hex << next_off << dec << dendl;
+#endif
 #endif
 }
 
@@ -5990,8 +6171,11 @@ int Client::_readdir_cache_cb(dir_result_t *dirp, add_dirent_cb_t cb, void *p)
       ++pd;
       continue;
     }
-
+#ifdef _WIN32
+    struct stat_ceph st;
+#else
     struct stat st;
+#endif
     struct dirent de;
     int stmask = fill_stat(dn->inode, &st);  
     fill_dirent(&de, dn->name.c_str(), st.st_mode, st.st_ino, dirp->offset + 1);
@@ -6036,7 +6220,11 @@ int Client::readdir_r_cb(dir_result_t *d, add_dirent_cb_t cb, void *p)
 	   << dendl;
 
   struct dirent de;
-  struct stat st;
+#ifdef _WIN32
+    struct stat_ceph st;
+#else
+    struct stat st;
+#endif
   memset(&de, 0, sizeof(de));
   memset(&st, 0, sizeof(st));
 
@@ -6203,13 +6391,21 @@ int Client::readdir_r(dir_result_t *d, struct dirent *de)
 
 struct single_readdir {
   struct dirent *de;
+#ifdef _WIN32
+  struct stat_ceph *st;
+#else
   struct stat *st;
+#endif
   int *stmask;
   bool full;
 };
-
+#ifdef _WIN32
+static int _readdir_single_dirent_cb(void *p, struct dirent *de, struct stat_ceph *st,
+				     int stmask, off_t off)
+#else
 static int _readdir_single_dirent_cb(void *p, struct dirent *de, struct stat *st,
 				     int stmask, off_t off)
+#endif
 {
   single_readdir *c = static_cast<single_readdir *>(p);
 
@@ -6230,7 +6426,11 @@ struct dirent *Client::readdir(dir_result_t *d)
   int ret;
   static int stmask;
   static struct dirent de;
+#ifdef _WIN32
+  static struct stat_ceph st;
+#else
   static struct stat st;
+#endif
   single_readdir sr;
   sr.de = &de;
   sr.st = &st;
@@ -6249,8 +6449,11 @@ struct dirent *Client::readdir(dir_result_t *d)
   }
   return (dirent *) NULL;
 }
-
+#ifdef _WIN32
+int Client::readdirplus_r(dir_result_t *d, struct dirent *de, struct stat_ceph *st, int *stmask)
+#else
 int Client::readdirplus_r(dir_result_t *d, struct dirent *de, struct stat *st, int *stmask)
+#endif
 {  
   single_readdir sr;
   sr.de = de;
@@ -6276,8 +6479,11 @@ struct getdents_result {
   int pos;
   bool fullent;
 };
-
+#ifdef _WIN32
+static int _readdir_getdent_cb(void *p, struct dirent *de, struct stat_ceph *st, int stmask, off_t off)
+#else
 static int _readdir_getdent_cb(void *p, struct dirent *de, struct stat *st, int stmask, off_t off)
+#endif
 {
   struct getdents_result *c = static_cast<getdents_result *>(p);
 
@@ -6328,8 +6534,11 @@ struct getdir_result {
   list<string> *contents;
   int num;
 };
-
+#ifdef _WIN32
+static int _getdir_cb(void *p, struct dirent *de, struct stat_ceph *st, int stmask, off_t off)
+#else
 static int _getdir_cb(void *p, struct dirent *de, struct stat *st, int stmask, off_t off)
+#endif
 {
   getdir_result *r = static_cast<getdir_result *>(p);
 
@@ -6377,12 +6586,35 @@ int Client::open(const char *relpath, int flags, mode_t mode, int stripe_unit,
 
   Fh *fh = NULL;
 
+#if defined(__linux__) && defined(O_PATH)
+  /* When the O_PATH is being specified, others flags than O_DIRECTORY
+   * and O_NOFOLLOW are ignored. Please refer do_entry_open() function
+   * in kernel (fs/open.c). */
+  if (flags & O_PATH)
+    flags &= O_DIRECTORY | O_NOFOLLOW | O_PATH;
+#endif
+
   filepath path(relpath);
   Inode *in;
   bool created = false;
+#ifdef _WIN32
   int r = path_walk(path, &in);
+#else
+  /* O_CREATE with O_EXCL enforces O_NOFOLLOW. */
+  bool followsym = !((flags & O_NOFOLLOW) || ((flags & O_CREAT) && (flags & O_EXCL)));
+  int r = path_walk(path, &in, followsym);
+#endif
   if (r == 0 && (flags & O_CREAT) && (flags & O_EXCL))
     return -EEXIST;
+#ifdef _WIN32
+#else
+#if defined(__linux__) && defined(O_PATH)
+  if (r == 0 && in->is_symlink() && (flags & O_NOFOLLOW) && !(flags & O_PATH))
+#else
+  if (r == 0 && in->is_symlink() && (flags & O_NOFOLLOW))
+#endif
+    return -ELOOP;
+#endif
   if (r == -ENOENT && (flags & O_CREAT)) {
     filepath dirpath = path;
     string dname = dirpath.last_dentry();
@@ -6695,6 +6927,10 @@ loff_t Client::lseek(int fd, loff_t offset, int whence)
   Fh *f = get_filehandle(fd);
   if (!f)
     return -EBADF;
+#if defined(__linux__) && defined(O_PATH)
+  if (f->flags & O_PATH)
+    return -EBADF;
+#endif
   return _lseek(f, offset, whence);
 }
 
@@ -6814,6 +7050,10 @@ int Client::read(int fd, char *buf, loff_t size, loff_t offset)
   Fh *f = get_filehandle(fd);
   if (!f)
     return -EBADF;
+#if defined(__linux__) && defined(O_PATH)
+  if (f->flags & O_PATH)
+    return -EBADF;
+#endif
   bufferlist bl;
   int r = _read(f, offset, size, &bl);
   ldout(cct, 3) << "read(" << fd << ", " << (void*)buf << ", " << size << ", " << offset << ") = " << r << dendl;
@@ -7135,6 +7375,10 @@ int Client::write(int fd, const char *buf, loff_t size, loff_t offset)
   Fh *fh = get_filehandle(fd);
   if (!fh)
     return -EBADF;
+#if defined(__linux__) && defined(O_PATH)
+  if (fh->flags & O_PATH)
+    return -EBADF;
+#endif
   int r = _write(fh, offset, size, buf);
   ldout(cct, 3) << "write(" << fd << ", \"...\", " << size << ", " << offset << ") = " << r << dendl;
   return r;
@@ -7365,7 +7609,11 @@ int Client::_flush(Fh *f)
 
 int Client::truncate(const char *relpath, loff_t length) 
 {
+#ifdef _WIN32
+  struct stat_ceph attr;
+#else
   struct stat attr;
+#endif
   attr.st_size = length;
   return setattr(relpath, &attr, CEPH_SETATTR_SIZE);
 }
@@ -7380,7 +7628,15 @@ int Client::ftruncate(int fd, loff_t length)
   Fh *f = get_filehandle(fd);
   if (!f)
     return -EBADF;
+#if defined(__linux__) && defined(O_PATH)
+  if (f->flags & O_PATH)
+    return -EBADF;
+#endif
+#ifdef _WIN32
+  struct stat_ceph attr;
+#else
   struct stat attr;
+#endif
   attr.st_size = length;
   return _setattr(f->inode, &attr, CEPH_SETATTR_SIZE);
 }
@@ -7395,6 +7651,10 @@ int Client::fsync(int fd, bool syncdataonly)
   Fh *f = get_filehandle(fd);
   if (!f)
     return -EBADF;
+#if defined(__linux__) && defined(O_PATH)
+  if (f->flags & O_PATH)
+    return -EBADF;
+#endif
   int r = _fsync(f, syncdataonly);
   ldout(cct, 3) << "fsync(" << fd << ", " << syncdataonly << ") = " << r << dendl;
   return r;
@@ -7471,8 +7731,11 @@ int Client::_fsync(Fh *f, bool syncdataonly)
 
   return r;
 }
-
+#ifdef _WIN32
+int Client::fstat(int fd, struct stat_ceph *stbuf) 
+#else
 int Client::fstat(int fd, struct stat *stbuf) 
+#endif
 {
   Mutex::Locker lock(client_lock);
   tout(cct) << "fstat" << std::endl;
@@ -7872,7 +8135,8 @@ int Client::_flock(Fh *fh, int cmd, uint64_t owner, void *fuse_req)
   ldout(cct, 10) << "_flock " << fh << " ino " << in->ino << " result=" << ret << dendl;
   return ret;
 }
-
+#ifdef _WIN32
+#else
 int Client::ll_statfs(Inode *in, struct statvfs *stbuf)
 {
   /* Since the only thing this does is wrap a call to statfs, and
@@ -7912,6 +8176,7 @@ void Client::ll_register_callbacks(struct client_callback_args *args)
   }
   getgroups_cb = args->getgroups_cb;
 }
+#endif
 
 int Client::_sync_fs()
 {
@@ -8057,7 +8322,8 @@ Inode *Client::open_snapdir(Inode *diri)
   }
   return in;
 }
-
+#ifdef _WIN32
+#else
 int Client::ll_lookup(Inode *parent, const char *name, struct stat *attr,
 		      Inode **out, int uid, int gid)
 {
@@ -8113,7 +8379,7 @@ int Client::ll_walk(const char* name, Inode **i, struct stat *attr)
       return 0;
     }
 }
-
+#endif
 
 void Client::_ll_get(Inode *in)
 {
@@ -8158,7 +8424,8 @@ void Client::_ll_drop_pins()
       _ll_put(in, in->ll_ref);
   }
 }
-
+#ifdef _WIN32
+#else
 bool Client::ll_forget(Inode *in, int count)
 {
   Mutex::Locker lock(client_lock);
@@ -8264,7 +8531,7 @@ int Client::ll_setattr(Inode *in, struct stat *attr, int mask, int uid,
   ldout(cct, 3) << "ll_setattr " << vino << " = " << res << dendl;
   return res;
 }
-
+#endif
 
 // ----------
 // xattrs
@@ -8379,7 +8646,12 @@ int Client::_getxattr(Inode *in, const char *name, void *value, size_t size,
     r = -ENODATA;
     if (in->xattrs.count(n)) {
       r = in->xattrs[n].length();
-      if (size != 0) {
+#ifdef _WIN32
+	  if (size != 0)
+#else
+      if (r > 0 && size != 0)
+#endif
+{
 	if (size >= (unsigned)r)
 	  memcpy(value, in->xattrs[n].c_str(), r);
 	else
@@ -8391,7 +8663,8 @@ int Client::_getxattr(Inode *in, const char *name, void *value, size_t size,
   ldout(cct, 3) << "_getxattr(" << in->ino << ", \"" << name << "\", " << size << ") = " << r << dendl;
   return r;
 }
-
+#ifdef _WIN32
+#else
 int Client::ll_getxattr(Inode *in, const char *name, void *value,
 			size_t size, int uid, int gid)
 {
@@ -8406,7 +8679,7 @@ int Client::ll_getxattr(Inode *in, const char *name, void *value,
 
   return _getxattr(in, name, value, size, uid, gid);
 }
-
+#endif
 int Client::_listxattr(Inode *in, char *name, size_t size, int uid, int gid)
 {
   int r = _getattr(in, CEPH_STAT_CAP_XATTR, uid, gid, in->xattr_version == 0);
@@ -8450,7 +8723,8 @@ int Client::_listxattr(Inode *in, char *name, size_t size, int uid, int gid)
   ldout(cct, 3) << "_listxattr(" << in->ino << ", " << size << ") = " << r << dendl;
   return r;
 }
-
+#ifdef _WIN32
+#else
 int Client::ll_listxattr(Inode *in, char *names, size_t size, int uid,
 			 int gid)
 {
@@ -8465,7 +8739,7 @@ int Client::ll_listxattr(Inode *in, char *names, size_t size, int uid,
 
   return _listxattr(in, names, size, uid, gid);
 }
-
+#endif
 int Client::_setxattr(Inode *in, const char *name, const void *value,
 		      size_t size, int flags, int uid, int gid)
 {
@@ -8506,7 +8780,8 @@ int Client::_setxattr(Inode *in, const char *name, const void *value,
     res << dendl;
   return res;
 }
-
+#ifdef _WIN32
+#else
 int Client::ll_setxattr(Inode *in, const char *name, const void *value,
 			size_t size, int flags, int uid, int gid)
 {
@@ -8521,7 +8796,7 @@ int Client::ll_setxattr(Inode *in, const char *name, const void *value,
 
   return _setxattr(in, name, value, size, flags, uid, gid);
 }
-
+#endif
 int Client::_removexattr(Inode *in, const char *name, int uid, int gid)
 {
   if (in->snapid != CEPH_NOSNAP) {
@@ -8553,7 +8828,8 @@ int Client::_removexattr(Inode *in, const char *name, int uid, int gid)
   return res;
 }
 
-
+#ifdef _WIN32
+#else
 int Client::ll_removexattr(Inode *in, const char *name, int uid, int gid)
 {
   Mutex::Locker lock(client_lock);
@@ -8567,7 +8843,7 @@ int Client::ll_removexattr(Inode *in, const char *name, int uid, int gid)
 
   return _removexattr(in, name, uid, gid);
 }
-
+#endif
 bool Client::_vxattrcb_quota_exists(Inode *in)
 {
   return in->quota.is_enable();
@@ -8779,7 +9055,8 @@ size_t Client::_vxattrs_calcu_name_size(const VXattr *vxattr)
   }
   return len;
 }
-
+#ifdef _WIN32
+#else
 int Client::ll_readlink(Inode *in, char *buf, size_t buflen, int uid, int gid)
 {
   Mutex::Locker lock(client_lock);
@@ -8800,7 +9077,7 @@ int Client::ll_readlink(Inode *in, char *buf, size_t buflen, int uid, int gid)
   ldout(cct, 3) << "ll_readlink " << vino << " = " << r << dendl;
   return r;
 }
-
+#endif
 int Client::_mknod(Inode *dir, const char *name, mode_t mode, dev_t rdev,
 		   int uid, int gid, Inode **inp)
 {
@@ -8847,7 +9124,8 @@ int Client::_mknod(Inode *dir, const char *name, mode_t mode, dev_t rdev,
   put_request(req);
   return res;
 }
-
+#ifdef _WIN32
+#else
 int Client::ll_mknod(Inode *parent, const char *name, mode_t mode,
 		     dev_t rdev, struct stat *attr, Inode **out,
 		     int uid, int gid)
@@ -8875,7 +9153,7 @@ int Client::ll_mknod(Inode *parent, const char *name, mode_t mode,
   *out = in;
   return r;
 }
-
+#endif
 int Client::_create(Inode *dir, const char *name, int flags, mode_t mode,
 		    Inode **inp, Fh **fhp, int stripe_unit, int stripe_count,
 		    int object_size, const char *data_pool, bool *created,
@@ -9008,7 +9286,8 @@ int Client::_mkdir(Inode *dir, const char *name, mode_t mode, int uid, int gid,
   put_request(req);
   return res;
 }
-
+#ifdef _WIN32
+#else
 int Client::ll_mkdir(Inode *parent, const char *name, mode_t mode,
 		     struct stat *attr, Inode **out, int uid, int gid)
 {
@@ -9034,7 +9313,7 @@ int Client::ll_mkdir(Inode *parent, const char *name, mode_t mode,
   *out = in;
   return r;
 }
-
+#endif
 int Client::_symlink(Inode *dir, const char *name, const char *target, int uid,
 		     int gid, Inode **inp)
 {
@@ -9079,7 +9358,8 @@ int Client::_symlink(Inode *dir, const char *name, const char *target, int uid,
   put_request(req);
   return res;
 }
-
+#ifdef _WIN32
+#else
 int Client::ll_symlink(Inode *parent, const char *name, const char *value,
 		       struct stat *attr, Inode **out, int uid, int gid)
 {
@@ -9106,7 +9386,7 @@ int Client::ll_symlink(Inode *parent, const char *name, const char *value,
   *out = in;
   return r;
 }
-
+#endif
 int Client::_unlink(Inode *dir, const char *name, int uid, int gid)
 {
   ldout(cct, 3) << "_unlink(" << dir->ino << " " << name << " uid " << uid << " gid " << gid << ")" << dendl;
@@ -9149,7 +9429,8 @@ int Client::_unlink(Inode *dir, const char *name, int uid, int gid)
   put_request(req);
   return res;
 }
-
+#ifdef _WIN32
+#else
 int Client::ll_unlink(Inode *in, const char *name, int uid, int gid)
 {
   Mutex::Locker lock(client_lock);
@@ -9163,7 +9444,7 @@ int Client::ll_unlink(Inode *in, const char *name, int uid, int gid)
 
   return _unlink(in, name, uid, gid);
 }
-
+#endif
 int Client::_rmdir(Inode *dir, const char *name, int uid, int gid)
 {
   ldout(cct, 3) << "_rmdir(" << dir->ino << " " << name << " uid " << uid <<
@@ -9187,12 +9468,24 @@ int Client::_rmdir(Inode *dir, const char *name, int uid, int gid)
   int res = get_or_create(dir, name, &de);
   if (res < 0)
     goto fail;
-  req->set_dentry(de);
+#ifdef _WIN32
+	req->set_dentry(de);
+#else
+#endif
   Inode *in;
   res = _lookup(dir, name, &in);
   if (res < 0)
     goto fail;
+#ifdef _WIN32
   req->set_inode(in);
+#else
+  if (req->get_op() == CEPH_MDS_OP_RMDIR) {
+    req->set_dentry(de);
+    req->set_inode(in);
+  } else {
+    unlink(de, true, true);
+  }
+#endif
 
   res = make_request(req, uid, gid);
 
@@ -9204,7 +9497,8 @@ int Client::_rmdir(Inode *dir, const char *name, int uid, int gid)
   put_request(req);
   return res;
 }
-
+#ifdef _WIN32
+#else
 int Client::ll_rmdir(Inode *in, const char *name, int uid, int gid)
 {
   Mutex::Locker lock(client_lock);
@@ -9218,7 +9512,7 @@ int Client::ll_rmdir(Inode *in, const char *name, int uid, int gid)
 
   return _rmdir(in, name, uid, gid);
 }
-
+#endif
 int Client::_rename(Inode *fromdir, const char *fromname, Inode *todir, const char *toname, int uid, int gid)
 {
   ldout(cct, 3) << "_rename(" << fromdir->ino << " " << fromname << " to " << todir->ino << " " << toname
@@ -9296,7 +9590,8 @@ int Client::_rename(Inode *fromdir, const char *fromname, Inode *todir, const ch
   put_request(req);
   return res;
 }
-
+#ifdef _WIN32
+#else
 int Client::ll_rename(Inode *parent, const char *name, Inode *newparent,
 		      const char *newname, int uid, int gid)
 {
@@ -9315,7 +9610,7 @@ int Client::ll_rename(Inode *parent, const char *name, Inode *newparent,
 
   return _rename(parent, name, newparent, newname, uid, gid);
 }
-
+#endif
 int Client::_link(Inode *in, Inode *dir, const char *newname, int uid, int gid, Inode **inp)
 {
   ldout(cct, 3) << "_link(" << in->ino << " to " << dir->ino << " " << newname
@@ -9359,7 +9654,8 @@ int Client::_link(Inode *in, Inode *dir, const char *newname, int uid, int gid, 
   put_request(req);
   return res;
 }
-
+#ifdef _WIN32
+#else
 int Client::ll_link(Inode *parent, Inode *newparent, const char *newname,
 		    struct stat *attr, int uid, int gid)
 {
@@ -9812,7 +10108,7 @@ int Client::ll_fsync(Fh *fh, bool syncdataonly)
 
   return _fsync(fh, syncdataonly);
 }
-
+#endif
 #ifdef FALLOC_FL_PUNCH_HOLE
 
 int Client::_fallocate(Fh *fh, int mode, int64_t offset, int64_t length)
@@ -9960,7 +10256,8 @@ int Client::_fallocate(Fh *fh, int mode, int64_t offset, int64_t length)
 
 #endif
 
-
+#ifdef _WIN32
+#else
 int Client::ll_fallocate(Fh *fh, int mode, loff_t offset, loff_t length)
 {
   Mutex::Locker lock(client_lock);
@@ -9970,7 +10267,7 @@ int Client::ll_fallocate(Fh *fh, int mode, loff_t offset, loff_t length)
 
   return _fallocate(fh, mode, offset, length);
 }
-
+#endif
 int Client::fallocate(int fd, int mode, loff_t offset, loff_t length)
 {
   Mutex::Locker lock(client_lock);
@@ -9979,9 +10276,14 @@ int Client::fallocate(int fd, int mode, loff_t offset, loff_t length)
   Fh *fh = get_filehandle(fd);
   if (!fh)
     return -EBADF;
+#if defined(__linux__) && defined(O_PATH)
+  if (fh->flags & O_PATH)
+    return -EBADF;
+#endif
   return _fallocate(fh, mode, offset, length);
 }
-
+#ifdef _WIN32
+#else
 int Client::ll_release(Fh *fh)
 {
   Mutex::Locker lock(client_lock);
@@ -10022,7 +10324,7 @@ int Client::ll_flock(Fh *fh, int cmd, uint64_t owner, void *fuse_req)
 
   return _flock(fh, cmd, owner, fuse_req);
 }
-
+#endif
 class C_Client_RequestInterrupt : public Context  {
 private:
   Client *client;
@@ -10038,7 +10340,8 @@ public:
     client->put_request(req);
   }
 };
-
+#ifdef _WIN32
+#else
 void Client::ll_interrupt(void *d)
 {
   MetaRequest *req = static_cast<MetaRequest*>(d);
@@ -10046,7 +10349,7 @@ void Client::ll_interrupt(void *d)
   tout(cct) << "ll_interrupt tid " << req->get_tid() << std::endl;
   interrupt_finisher.queue(new C_Client_RequestInterrupt(this, req));
 }
-
+#endif
 // =========================================
 // layout
 
