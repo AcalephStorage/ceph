@@ -35,11 +35,9 @@
 #include <inttypes.h>
 #include <stdint.h>
 #include <string.h>
-#ifdef _WIN32
-# else
-#  ifndef __CYGWIN__
-#  include <sys/mman.h>
-#  endif
+
+#ifndef __CYGWIN__
+# include <sys/mman.h>
 #endif
 
 #include <iostream>
@@ -64,13 +62,6 @@
   #define CEPH_BUFFER_API
 #endif
 
-#ifdef _WIN32
-#else
-#if defined(HAVE_XIO)
-struct xio_mempool_obj;
-class XioDispatchHook;
-#endif
-#endif
 namespace ceph {
 
 class CEPH_BUFFER_API buffer {
@@ -140,10 +131,8 @@ private:
   class raw;
   class raw_malloc;
   class raw_static;
-#ifndef _WIN32
   class raw_mmap_pages;
   class raw_posix_aligned;
-#endif
   class raw_hack_aligned;
   class raw_char;
   class raw_pipe;
@@ -152,10 +141,7 @@ private:
   friend std::ostream& operator<<(std::ostream& out, const raw &r);
 
 public:
-#ifndef _WIN32
-  class xio_mempool;
-  class xio_msg_buffer;
-#endif
+
   /*
    * named constructors 
    */
@@ -169,11 +155,7 @@ public:
   static raw* create_page_aligned(unsigned len);
   static raw* create_zero_copy(unsigned len, int fd, int64_t *offset);
   static raw* create_unshareable(unsigned len);
-#ifndef _WIN32
-#if defined(HAVE_XIO)
-  static raw* create_msg(unsigned len, char *buf, XioDispatchHook *m_hook);
-#endif
-#endif
+
   /*
    * a buffer pointer.  references (a subsequence of) a raw buffer.
    */
@@ -534,12 +516,7 @@ public:
     }
   };
 };
-#ifdef _WIN32
-#else
-#if defined(HAVE_XIO)
-xio_mempool_obj* get_xio_mp(const buffer::ptr& bp);
-#endif
-#endif
+
 typedef buffer::ptr bufferptr;
 typedef buffer::list bufferlist;
 typedef buffer::hash bufferhash;

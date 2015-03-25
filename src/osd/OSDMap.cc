@@ -23,11 +23,7 @@
 #include "include/str_map.h"
 
 #include "common/code_environment.h"
-#ifndef _WIN32
-#include "include/stringify.h"
-#include "common/TextTable.h"
-#include "crush/CrushTreeDumper.h"
-#endif
+
 #define dout_subsys ceph_subsys_osd
 
 // ----------------------------------
@@ -1034,22 +1030,12 @@ uint64_t OSDMap::get_features(int entity_type, uint64_t *pmask) const
     features |= CEPH_FEATURE_CRUSH_TUNABLES2;
   if (crush->has_nondefault_tunables3())
     features |= CEPH_FEATURE_CRUSH_TUNABLES3;
-#ifndef _WIN32
-  if (crush->has_v4_buckets())
-    features |= CEPH_FEATURE_CRUSH_V4;
-#endif
   mask |= CEPH_FEATURES_CRUSH;
 
   for (map<int64_t,pg_pool_t>::const_iterator p = pools.begin(); p != pools.end(); ++p) {
-#ifdef _WIN32
     if (p->second.flags & pg_pool_t::FLAG_HASHPSPOOL) {
       features |= CEPH_FEATURE_OSDHASHPSPOOL;
     }
-#else
-    if (p->second.has_flag(pg_pool_t::FLAG_HASHPSPOOL)) {
-      features |= CEPH_FEATURE_OSDHASHPSPOOL;
-    }
-#endif
     if (p->second.is_erasure() &&
 	entity_type != CEPH_ENTITY_TYPE_CLIENT) { // not for clients
       features |= CEPH_FEATURE_OSD_ERASURE_CODES;
@@ -1097,7 +1083,7 @@ uint64_t OSDMap::get_features(int entity_type, uint64_t *pmask) const
     *pmask = mask;
   return features;
 }
-#ifdef _WIN32
+
 uint64_t OSDMap::get_up_osd_features() const
 {
   bool first = true;
@@ -1115,29 +1101,7 @@ uint64_t OSDMap::get_up_osd_features() const
   }
   return features;
 }
-#else
-void OSDMap::_calc_up_osd_features()
-{
-  bool first = true;
-  cached_up_osd_features = 0;
-  for (int osd = 0; osd < max_osd; ++osd) {
-    if (!is_up(osd))
-      continue;
-    const osd_xinfo_t &xi = get_xinfo(osd);
-    if (first) {
-      cached_up_osd_features = xi.features;
-      first = false;
-    } else {
-      cached_up_osd_features &= xi.features;
-    }
-  }
-}
 
-uint64_t OSDMap::get_up_osd_features() const
-{
-  return cached_up_osd_features;
-}
-#endif
 void OSDMap::dedup(const OSDMap *o, OSDMap *n)
 {
   if (o->epoch == n->epoch)
@@ -1209,20 +1173,7 @@ void OSDMap::remove_redundant_temporaries(CephContext *cct, const OSDMap& osdmap
   for (map<pg_t,vector<int32_t> >::iterator p = osdmap.pg_temp->begin();
        p != osdmap.pg_temp->end();
        ++p) {
-#ifdef _WIN32
     if (pending_inc->new_pg_temp.count(p->first) == 0) {
-#else
-
-    // if pool does not exist, remove any existing pg_temps associated with
-    // it.  we don't care about pg_temps on the pending_inc either; if there
-    // are new_pg_temp entries on the pending, clear them out just as well.
-    if (!osdmap.have_pg_pool(p->first.pool())) {
-      ldout(cct, 10) << " removing pg_temp " << p->first
-        << " for inexistent pool " << p->first.pool() << dendl;
-      pending_inc->new_pg_temp[p->first].clear();
-
-    } else if (pending_inc->new_pg_temp.count(p->first) == 0) {
-#endif
       vector<int> raw_up;
       int primary;
       osdmap.pg_to_raw_up(p->first, &raw_up, &primary);
@@ -1292,7 +1243,6 @@ int OSDMap::apply_incremental(const Incremental &inc)
     return -EINVAL;
   
   assert(inc.epoch == epoch+1);
-
   epoch++;
   modified = inc.modified;
 
@@ -1355,25 +1305,18 @@ int OSDMap::apply_incremental(const Incremental &inc)
   }
 
   // erasure_code_profiles
-#ifndef _WIN32
-  for (vector<string>::const_iterator i = inc.old_erasure_code_profiles.begin();
-       i != inc.old_erasure_code_profiles.end();
-       ++i)
-    erasure_code_profiles.erase(*i);
-#endif
   for (map<string,map<string,string> >::const_iterator i =
 	 inc.new_erasure_code_profiles.begin();
        i != inc.new_erasure_code_profiles.end();
        ++i) {
     set_erasure_code_profile(i->first, i->second);
   }
-#ifdef _WIN32
+  
   for (vector<string>::const_iterator i = inc.old_erasure_code_profiles.begin();
        i != inc.old_erasure_code_profiles.end();
        ++i)
     erasure_code_profiles.erase(*i);
   
-#endif
   // up/down
   for (map<int32_t,uint8_t>::const_iterator i = inc.new_state.begin();
        i != inc.new_state.end();
@@ -1481,9 +1424,6 @@ int OSDMap::apply_incremental(const Incremental &inc)
   }
 
   calc_num_osds();
-#ifndef _WIN32
-  _calc_up_osd_features();
-#endif
   return 0;
 }
 
@@ -1615,9 +1555,6 @@ void OSDMap::_apply_primary_affinity(ps_t seed,
     if (*p != CRUSH_ITEM_NONE &&
 	(*osd_primary_affinity)[*p] != CEPH_OSD_DEFAULT_PRIMARY_AFFINITY) {
       any = true;
-#ifndef _WIN32
-      break;
-#endif
     }
   }
   if (!any)
@@ -2243,9 +2180,6 @@ void OSDMap::post_decode()
   }
 
   calc_num_osds();
-#ifndef _WIN32
-  _calc_up_osd_features();
-#endif
 }
 
 void OSDMap::dump_erasure_code_profiles(const map<string,map<string,string> > &profiles,
@@ -2373,7 +2307,7 @@ void OSDMap::dump(Formatter *f) const
 
   dump_erasure_code_profiles(erasure_code_profiles, f);
 }
-#ifndef _WIN32
+
 void OSDMap::generate_test_instances(list<OSDMap*>& o)
 {
   o.push_back(new OSDMap);
@@ -2386,7 +2320,6 @@ void OSDMap::generate_test_instances(list<OSDMap*>& o)
   o.back()->blacklist[entity_addr_t()] = utime_t(5, 6);
   cct->put();
 }
-#endif
 
 string OSDMap::get_flag_string(unsigned f)
 {
@@ -2411,10 +2344,6 @@ string OSDMap::get_flag_string(unsigned f)
     s += ",noin";
   if (f & CEPH_OSDMAP_NOBACKFILL)
     s += ",nobackfill";
-#ifndef _WIN32
-  if (f & CEPH_OSDMAP_NOREBALANCE)
-    s += ",norebalance";
-#endif
   if (f & CEPH_OSDMAP_NORECOVER)
     s += ",norecover";
   if (f & CEPH_OSDMAP_NOSCRUB)
@@ -2423,13 +2352,8 @@ string OSDMap::get_flag_string(unsigned f)
     s += ",nodeep-scrub";
   if (f & CEPH_OSDMAP_NOTIERAGENT)
     s += ",notieragent";
-#ifdef _WIN32
   if (s.length())
     s = s.erase(0, 1);
-#else
-  if (s.length())
-    s.erase(0, 1);
-#endif
   return s;
 }
 
@@ -2520,7 +2444,7 @@ void OSDMap::print(ostream& out) const
 
   // ignore pg_swap_primary
 }
-#ifdef _WIN32
+
 void OSDMap::print_osd_line(int cur, ostream *out, Formatter *f) const
 {
   if (f) {
@@ -2663,110 +2587,7 @@ void OSDMap::print_tree(ostream *out, Formatter *f) const
   if (f)
     f->close_section();
 }
-#else
-class OSDTreePlainDumper : public CrushTreeDumper::Dumper<TextTable> {
-public:
-  typedef CrushTreeDumper::Dumper<TextTable> Parent;
-  OSDTreePlainDumper(const CrushWrapper *crush, const OSDMap *osdmap_)
-    : Parent(crush), osdmap(osdmap_) {}
 
-  void dump(TextTable *tbl) {
-    tbl->define_column("ID", TextTable::LEFT, TextTable::RIGHT);
-    tbl->define_column("WEIGHT", TextTable::LEFT, TextTable::RIGHT);
-    tbl->define_column("TYPE NAME", TextTable::LEFT, TextTable::LEFT);
-    tbl->define_column("UP/DOWN", TextTable::LEFT, TextTable::RIGHT);
-    tbl->define_column("REWEIGHT", TextTable::LEFT, TextTable::RIGHT);
-    tbl->define_column("PRIMARY-AFFINITY", TextTable::LEFT, TextTable::RIGHT);
-
-    Parent::dump(tbl);
-
-    for (int i = 0; i <= osdmap->get_max_osd(); i++) {
-      if (osdmap->exists(i) && !is_touched(i))
-	dump_item(CrushTreeDumper::Item(i, 0, 0), tbl);
-    }
-  }
-
-protected:
-  virtual void dump_item(const CrushTreeDumper::Item &qi, TextTable *tbl) {
-
-    *tbl << qi.id
-	 << weightf_t(qi.weight);
-
-    ostringstream name;
-    for (int k = 0; k < qi.depth; k++)
-      name << "    ";
-    if (qi.is_bucket()) {
-      name << crush->get_type_name(crush->get_bucket_type(qi.id)) << " "
-	   << crush->get_item_name(qi.id);
-    } else {
-      name << "osd." << qi.id;
-    }
-    *tbl << name.str();
-
-    if (!qi.is_bucket()) {
-      if (!osdmap->exists(qi.id)) {
-	*tbl << "DNE"
-	     << 0;
-      } else {
-	*tbl << (osdmap->is_up(qi.id) ? "up" : "down")
-	     << weightf_t(osdmap->get_weightf(qi.id))
-	     << weightf_t(osdmap->get_primary_affinityf(qi.id));
-      }
-    }
-    *tbl << TextTable::endrow;
-  }
-
-private:
-  const OSDMap *osdmap;
-};
-
-class OSDTreeFormattingDumper : public CrushTreeDumper::FormattingDumper {
-public:
-  typedef CrushTreeDumper::FormattingDumper Parent;
-
-  OSDTreeFormattingDumper(const CrushWrapper *crush, const OSDMap *osdmap_)
-    : Parent(crush), osdmap(osdmap_) {}
-
-  void dump(Formatter *f) {
-    f->open_array_section("nodes");
-    Parent::dump(f);
-    f->close_section();
-    f->open_array_section("stray");
-    for (int i = 0; i <= osdmap->get_max_osd(); i++) {
-      if (osdmap->exists(i) && !is_touched(i))
-	dump_item(CrushTreeDumper::Item(i, 0, 0), f);
-    }
-    f->close_section();
-  }
-
-protected:
-  virtual void dump_item_fields(const CrushTreeDumper::Item &qi, Formatter *f) {
-    Parent::dump_item_fields(qi, f);
-    if (!qi.is_bucket())
-    {
-      f->dump_unsigned("exists", (int)osdmap->exists(qi.id));
-      f->dump_string("status", osdmap->is_up(qi.id) ? "up" : "down");
-      f->dump_float("reweight", osdmap->get_weightf(qi.id));
-      f->dump_float("primary_affinity", osdmap->get_primary_affinityf(qi.id));
-    }
-  }
-
-private:
-  const OSDMap *osdmap;
-};
-
-void OSDMap::print_tree(ostream *out, Formatter *f) const
-{
-  if (out) {
-    TextTable tbl;
-    OSDTreePlainDumper(crush.get(), this).dump(&tbl);
-    *out << tbl;
-  }
-  if (f)
-    OSDTreeFormattingDumper(crush.get(), this).dump(f);
-}
-
-#endif
 void OSDMap::print_summary(Formatter *f, ostream& out) const
 {
   if (f) {
@@ -2779,20 +2600,10 @@ void OSDMap::print_summary(Formatter *f, ostream& out) const
     f->dump_bool("nearfull", test_flag(CEPH_OSDMAP_NEARFULL) ? true : false);
     f->close_section();
   } else {
-#ifdef _WIN32
     out << "     osdmap e" << get_epoch() << ": "
 	<< get_num_osds() << " osds: "
 	<< get_num_up_osds() << " up, "
 	<< get_num_in_osds() << " in\n";
-#else
-    out << "     osdmap e" << get_epoch() << ": "
-	<< get_num_osds() << " osds: "
-	<< get_num_up_osds() << " up, "
-	<< get_num_in_osds() << " in";
-    if (get_num_pg_temp())
-      out << "; " << get_num_pg_temp() << " remapped pgs";
-    out << "\n";
-#endif
     if (flags)
       out << "            flags " << get_flag_string() << "\n";
   }
@@ -2818,7 +2629,6 @@ bool OSDMap::crush_ruleset_in_use(int ruleset) const
   }
   return false;
 }
-#ifndef _WIN32
 
 int OSDMap::build_simple(CephContext *cct, epoch_t e, uuid_d &fsid,
 			  int nosd, int pg_bits, int pgp_bits)
@@ -2885,13 +2695,7 @@ int OSDMap::build_simple(CephContext *cct, epoch_t e, uuid_d &fsid,
     pools[pool].type = pg_pool_t::TYPE_REPLICATED;
     pools[pool].flags = cct->_conf->osd_pool_default_flags;
     if (cct->_conf->osd_pool_default_flag_hashpspool)
-      pools[pool].set_flag(pg_pool_t::FLAG_HASHPSPOOL);
-    if (cct->_conf->osd_pool_default_flag_nodelete)
-      pools[pool].set_flag(pg_pool_t::FLAG_NODELETE);
-    if (cct->_conf->osd_pool_default_flag_nopgchange)
-      pools[pool].set_flag(pg_pool_t::FLAG_NOPGCHANGE);
-    if (cct->_conf->osd_pool_default_flag_nosizechange)
-      pools[pool].set_flag(pg_pool_t::FLAG_NOSIZECHANGE);
+      pools[pool].flags |= pg_pool_t::FLAG_HASHPSPOOL;
     pools[pool].size = cct->_conf->osd_pool_default_size;
     pools[pool].min_size = cct->_conf->get_osd_pool_default_min_size();
     pools[pool].crush_ruleset = default_replicated_ruleset;
@@ -2932,7 +2736,6 @@ int OSDMap::get_erasure_code_profile_default(CephContext *cct,
     cct->_conf->osd_pool_default_erasure_code_directory;
   return r;
 }
-#endif
 
 int OSDMap::_build_crush_types(CrushWrapper& crush)
 {
@@ -2958,13 +2761,8 @@ int OSDMap::build_simple_crush_map(CephContext *cct, CrushWrapper& crush,
   // root
   int root_type = _build_crush_types(crush);
   int rootid;
-#ifdef _WIN32
   int r = crush.add_bucket(0, CRUSH_BUCKET_STRAW, CRUSH_HASH_DEFAULT,
 			   root_type, 0, NULL, NULL, &rootid);
-#else
-  int r = crush.add_bucket(0, 0, CRUSH_HASH_DEFAULT,
-			   root_type, 0, NULL, NULL, &rootid);
-#endif
   assert(r == 0);
   crush.set_item_name(rootid, "default");
 
@@ -2999,14 +2797,8 @@ int OSDMap::build_simple_crush_map_from_conf(CephContext *cct,
   // root
   int root_type = _build_crush_types(crush);
   int rootid;
-#ifdef _WIN32
   int r = crush.add_bucket(0, CRUSH_BUCKET_STRAW, CRUSH_HASH_DEFAULT,
 			   root_type, 0, NULL, NULL, &rootid);
-#else
-  int r = crush.add_bucket(0, 0,
-			   CRUSH_HASH_DEFAULT,
-			   root_type, 0, NULL, NULL, &rootid);
-#endif
   assert(r == 0);
   crush.set_item_name(rootid, "default");
 

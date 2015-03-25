@@ -24,8 +24,7 @@
 #include <stdlib.h>
 #include <sys/stat.h>
 #include <sys/types.h>
-#ifdef _WIN32
-#else
+
 std::string signal_mask_to_str()
 {
   sigset_t old_sigset;
@@ -45,12 +44,10 @@ std::string signal_mask_to_str()
   oss << " }";
   return oss.str();
 }
-#endif
+
 /* Block the signals in 'siglist'. If siglist == NULL, block all signals. */
 void block_signals(const int *siglist, sigset_t *old_sigset)
 {
-#ifdef _WIN32
-#else
   sigset_t sigset;
   if (!siglist) {
     sigfillset(&sigset);
@@ -65,26 +62,19 @@ void block_signals(const int *siglist, sigset_t *old_sigset)
   }
   int ret = pthread_sigmask(SIG_BLOCK, &sigset, old_sigset);
   assert(ret == 0);
-#endif
 }
 
 void restore_sigset(const sigset_t *old_sigset)
 {
-#ifdef _WIN32
-#else
   int ret = pthread_sigmask(SIG_SETMASK, old_sigset, NULL);
   assert(ret == 0);
-#endif
 }
 
 void unblock_all_signals(sigset_t *old_sigset)
 {
-#ifdef _WIN32
-#else
   sigset_t sigset;
   sigfillset(&sigset);
   sigdelset(&sigset, SIGKILL);
   int ret = pthread_sigmask(SIG_UNBLOCK, &sigset, old_sigset);
   assert(ret == 0);
-#endif
 }

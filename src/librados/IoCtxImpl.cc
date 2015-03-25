@@ -24,34 +24,14 @@
 #define dout_subsys ceph_subsys_rados
 #undef dout_prefix
 #define dout_prefix *_dout << "librados: "
-#ifdef _WIN32
-librados::IoCtxImpl::IoCtxImpl() :
-  ref_cnt(0), client(NULL), poolid(0), assert_ver(0), last_objver(0),
-  notify_timeout(30), aio_write_list_lock("librados::IoCtxImpl::aio_write_list_lock"),
-  aio_write_seq(0), cached_pool_names_lock("librados::IoCtxImpl::cached_pool_names_lock"),
-  objecter(NULL)
-{
-}
-#else
+
 librados::IoCtxImpl::IoCtxImpl() :
   ref_cnt(0), client(NULL), poolid(0), assert_ver(0), last_objver(0),
   notify_timeout(30), aio_write_list_lock("librados::IoCtxImpl::aio_write_list_lock"),
   aio_write_seq(0), objecter(NULL)
 {
 }
-#endif
-#ifdef _WIN32
-librados::IoCtxImpl::IoCtxImpl(RadosClient *c, Objecter *objecter,
-			       int64_t poolid, snapid_t s)
-  : ref_cnt(0), client(c), poolid(poolid), snap_seq(s),
-    assert_ver(0), last_objver(0),
-    notify_timeout(c->cct->_conf->client_notify_timeout),
-    oloc(poolid), aio_write_list_lock("librados::IoCtxImpl::aio_write_list_lock"),
-    aio_write_seq(0), cached_pool_names_lock("librados::IoCtxImpl::cached_pool_names_lock"),
-    objecter(objecter)
-{
-}
-#else
+
 librados::IoCtxImpl::IoCtxImpl(RadosClient *c, Objecter *objecter,
 			       int64_t poolid,
 			       const char *pool_name, snapid_t s)
@@ -63,7 +43,6 @@ librados::IoCtxImpl::IoCtxImpl(RadosClient *c, Objecter *objecter,
     aio_write_seq(0), objecter(objecter)
 {
 }
-#endif
 
 void librados::IoCtxImpl::set_snap_read(snapid_t s)
 {
@@ -166,20 +145,7 @@ void librados::IoCtxImpl::flush_aio_writes()
     aio_write_cond.Wait(aio_write_list_lock);
   aio_write_list_lock.Unlock();
 }
-#ifdef _WIN32
-const string& librados::IoCtxImpl::get_cached_pool_name()
-{
-  std::string pn;
-  client->pool_get_name(get_id(), &pn);
 
-  Mutex::Locker l(cached_pool_names_lock);
-
-  if (cached_pool_names.empty() || cached_pool_names.back() != pn)
-    cached_pool_names.push_back(pn);
-
-  return cached_pool_names.back();
-}
-#endif
 // SNAPS
 
 int librados::IoCtxImpl::snap_create(const char *snapName)

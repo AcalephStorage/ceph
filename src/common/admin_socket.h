@@ -20,10 +20,6 @@
 
 #include <string>
 #include <map>
-#ifdef _WIN32
-#include <fcntl.h>
-#include <winsock2.h>
-#endif
 #include "include/buffer.h"
 #include "common/cmdparse.h"
 
@@ -81,9 +77,7 @@ private:
   AdminSocket& operator=(const AdminSocket &rhs);
 
   void shutdown();
-#ifdef _WIN32
-  WSADATA wsa;
-#endif
+
   std::string create_shutdown_pipe(int *pipe_rd, int *pipe_wr);
   std::string bind_and_listen(const std::string &sock_path, int *fd);
 

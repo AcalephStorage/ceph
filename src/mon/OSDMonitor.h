@@ -139,9 +139,7 @@ private:
    * optimization to try to avoid sending the same inc maps twice.
    */
   map<int,epoch_t> osd_epoch;
-#ifndef _WIN32
-  void note_osd_has_epoch(int osd, epoch_t epoch);
-#endif
+
   void check_failures(utime_t now);
   bool check_failure(utime_t now, int target_osd, failure_info_t& fi);
 
@@ -219,12 +217,10 @@ private:
   MOSDMap *build_incremental(epoch_t first, epoch_t last);
   void send_full(PaxosServiceMessage *m);
   void send_incremental(PaxosServiceMessage *m, epoch_t first);
-  void send_incremental(epoch_t first, MonSession *session, bool onetime);
+  void send_incremental(epoch_t first, entity_inst_t& dest, bool onetime);
 
   int reweight_by_utilization(int oload, std::string& out_str, bool by_pg,
 			      const set<int64_t> *pools);
-
-  void print_utilization(ostream &out, Formatter *f, bool tree) const;
 
   bool check_source(PaxosServiceMessage *m, uuid_d fsid);
  

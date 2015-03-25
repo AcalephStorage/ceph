@@ -17,12 +17,11 @@
 #include "include/util.h"
 #include "common/errno.h"
 #include "common/strtol.h"
-#ifdef _WIN32
-#else
+
 #ifdef HAVE_SYS_VFS_H
 #include <sys/vfs.h>
 #endif
-#endif
+
 // test if an entire buf is zero in 8-byte chunks
 bool buf_is_zero(const char *buf, size_t len)
 {
@@ -109,8 +108,7 @@ int64_t unit_to_bytesize(string val, ostream *pss)
   }
   return (r * (1LL << modifier));
 }
-#ifdef _WIN32
-#else
+
 int get_fs_stats(ceph_data_stats_t &stats, const char *path)
 {
   if (!path)
@@ -128,4 +126,3 @@ int get_fs_stats(ceph_data_stats_t &stats, const char *path)
   stats.avail_percent = (((float)stats.byte_avail/stats.byte_total)*100);
   return 0;
 }
-#endif

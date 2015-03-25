@@ -11,38 +11,20 @@
  * Foundation.  See file COPYING.
  * 
  */
-#ifdef _WIN32
-#include <winsock2.h>
-#include <ws2tcpip.h>
-#else
+
 #include <sys/socket.h>
 #include <netinet/tcp.h>
 #include <sys/uio.h>
-
-#include <poll.h>
-#endif
 #include <limits.h>
-#ifdef _WIN32
-#define SHUT_RDWR SD_BOTH
-#include "acconfig.h"
+#include <poll.h>
 
-#include "common/pipe.h"
-#include "include/compat.h"
-
-#include <errno.h>
-#include <fcntl.h>
-#include <unistd.h>
-#endif
 #include "msg/Message.h"
 #include "Pipe.h"
 #include "SimpleMessenger.h"
 
 #include "common/debug.h"
 #include "common/errno.h"
-#ifdef _WIN32
-#define F_SETFD 2
-#define FD_CLOEXEC 1
-#endif
+
 // Below included to get encode_encrypt(); That probably should be in Crypto.h, instead
 
 #include "auth/Crypto.h"
@@ -77,7 +59,6 @@ ostream& Pipe::_pipe_prefix(std::ostream *_dout) {
 /*
  * On BSD SO_NOSIGPIPE can be set via setsockopt to block SIGPIPE.
  */
-#ifndef _WIN32
 #ifndef MSG_NOSIGNAL
 # define MSG_NOSIGNAL 0
 # ifdef SO_NOSIGPIPE
@@ -86,7 +67,7 @@ ostream& Pipe::_pipe_prefix(std::ostream *_dout) {
 #  error "Cannot block SIGPIPE!"
 # endif
 #endif
-#endif
+
 /**************************************
  * Pipe
  */
@@ -849,11 +830,7 @@ void Pipe::set_socket_options()
   }
   if (msgr->cct->_conf->ms_tcp_rcvbuf) {
     int size = msgr->cct->_conf->ms_tcp_rcvbuf;
-#ifdef _WIN32
-    int r = ::setsockopt(sd, SOL_SOCKET, SO_RCVBUF, (char*)&size, sizeof(size));
-#else
     int r = ::setsockopt(sd, SOL_SOCKET, SO_RCVBUF, (void*)&size, sizeof(size));
-#endif
     if (r < 0)  {
       r = -errno;
       ldout(msgr->cct,0) << "couldn't set SO_RCVBUF to " << size << ": " << cpp_strerror(r) << dendl;
@@ -873,13 +850,6 @@ void Pipe::set_socket_options()
 
 int Pipe::connect()
 {
-#ifdef _WIN32
-  WSADATA wsa;
-  int retval;
-  retval = WSAStartup(MAKEWORD(2,2),&wsa);
-
-  ldout(msgr->cct,10) << "\nInitialising Winsock..." << dendl;
-#endif
   bool got_bad_auth = false;
 
   ldout(msgr->cct,10) << "connect " << connect_seq << dendl;
@@ -2132,55 +2102,6 @@ int Pipe::read_message(Message **pm, AuthSessionHandler* auth_handler)
 
 int Pipe::do_sendmsg(struct msghdr *msg, int len, bool more)
 {
-#ifdef _WIN32
-  char buf[80];
-
-    ldout(msgr->cct,0) << "..............do_sendmsg NOW" << dendl;
-    char* msg_buf = (char*)malloc(len);
-    if(msg_buf==NULL)
-    {
-            ldout(msgr->cct,0) << "do_sendmsg malloc ERROR" << dendl;
-            return -1;
-    }
-    
-    int l = 0;
-    char* msg_buf_off = msg_buf;
-    for (unsigned i=0; i<msg->msg_iovlen; i++)
-        {
-                memcpy(msg_buf_off, msg->msg_iov[i].iov_base, msg->msg_iov[i].iov_len);
-                msg_buf_off+=msg->msg_iov[i].iov_len;
-                assert(msg_buf_off<=msg_buf+len);
-        }
-        
-        #define MSG_BLOCK_SIZE 256*1024*1024
-        
-        msg_buf_off = msg_buf;
-        while (len > 0) {
-                int send_len_this_time = MIN(len, MSG_BLOCK_SIZE);
-                while(send_len_this_time > 0)
-                {
-                        int r = ::send( sd, msg_buf_off, send_len_this_time, 0 );
-                        if (r < 0) {
-                                ldout(msgr->cct,0) << "do_sendmsg ERROR " << strerror_r(errno, buf, sizeof(buf)) << dendl;
-                                free(msg_buf);
-                                return r;
-                        }
-                        if (state == STATE_CLOSED) {
-                                ldout(msgr->cct,0) << "do_sendmsg oh look, state == CLOSED, giving up" << dendl;
-                                errno = EINTR;
-                                free(msg_buf);
-                                return -1; // close enough
-                        }
-                        send_len_this_time -= r;
-                        msg_buf_off += r;
-                }
-                
-                len -= MIN(len, MSG_BLOCK_SIZE);
-        }
-        free(msg_buf);
-        msg_buf=NULL;
-    ldout(msgr->cct,0) << "do_sendmsg OK " << dendl;
-#else
   while (len > 0) {
     if (0) { // sanity
       int l = 0;
@@ -2223,7 +2144,6 @@ int Pipe::do_sendmsg(struct msghdr *msg, int len, bool more)
       }
     }
   }
-#endif
   return 0;
 }
 
@@ -2441,22 +2361,6 @@ int Pipe::tcp_read(char *buf, int len)
 
 int Pipe::tcp_read_wait()
 {
-#ifdef _WIN32
-  if (sd < 0)
-    return -1;
-
-    fd_set fds;
-    FD_ZERO(&fds);
-    FD_SET(sd, &fds);
-    struct timeval tv = {msgr->cct->_conf->ms_tcp_read_timeout, 0};
-    
-    int ret=::select(0, &fds, NULL, NULL, &tv);
-    if(ret == SOCKET_ERROR)
-            return -1;
-    if(ret<=0)
-        return -1;
-        
-#else
   if (sd < 0)
     return -1;
   struct pollfd pfd;
@@ -2482,7 +2386,7 @@ int Pipe::tcp_read_wait()
 
   if (!(pfd.revents & POLLIN))
     return -1;
-#endif
+
   return 0;
 }
 
@@ -2490,10 +2394,6 @@ int Pipe::do_recv(char *buf, size_t len, int flags)
 {
 again:
   int got = ::recv( sd, buf, len, flags );
-#ifdef _WIN32
-  if(got == SOCKET_ERROR)
-    return -1;
-#endif
   if (got < 0) {
     if (errno == EAGAIN || errno == EINTR) {
       goto again;
@@ -2554,7 +2454,7 @@ int Pipe::buffered_recv(char *buf, size_t len, int flags)
   total_recv += got;
   return total_recv;
 }
-#ifndef _WIN32
+
 int Pipe::tcp_read_nonblocking(char *buf, int len)
 {
   int got = buffered_recv(buf, len, MSG_DONTWAIT );
@@ -2572,42 +2472,16 @@ int Pipe::tcp_read_nonblocking(char *buf, int len)
   }
   return got;
 }
-#endif
-#ifdef _WIN32
-int Pipe::tcp_read_nonblocking(char *buf, int len)
-{
-again:
-  //int got = ::recv( sd, buf, len, MSG_DONTWAIT );
-  int got = ::recv( sd, buf, len, 0 );
-  if (got < 0) {
-    if (errno == EAGAIN || errno == EINTR) {
-      goto again;
-    } else {
-      ldout(msgr->cct, 10) << "tcp_read_nonblocking socket " << sd << " returned "
-                     << got << " errno " << errno << " " << cpp_strerror(errno) << dendl;
-      return -1;
-    }
-  } else if (got == 0) {
-    /* poll() said there was data, but we didn't read any - peer
-     * sent a FIN.  Maybe POLLRDHUP signals this, but this is
-     * standard socket behavior as documented by Stevens.
-     */
-    return -1;
-  }
-  return got;
-}
-#endif
+
 int Pipe::tcp_write(const char *buf, int len)
 {
   if (sd < 0)
     return -1;
-#ifndef _WIN32
   struct pollfd pfd;
   pfd.fd = sd;
   pfd.events = POLLOUT | POLLHUP | POLLNVAL | POLLERR;
 #if defined(__linux__)
   pfd.events |= POLLRDHUP;
-#endif
 #endif
 
   if (msgr->cct->_conf->ms_inject_socket_failures && sd >= 0) {
@@ -2616,36 +2490,20 @@ int Pipe::tcp_write(const char *buf, int len)
       ::shutdown(sd, SHUT_RDWR);
     }
   }
-#ifndef _WIN32
+
   if (poll(&pfd, 1, -1) < 0)
     return -1;
 
   if (!(pfd.revents & POLLOUT))
     return -1;
-#else
-    fd_set fds;
-    FD_ZERO(&fds);
-    FD_SET(sd, &fds);
-    
-    int ret=::select(0, NULL, &fds, NULL, NULL);
-    if(ret == SOCKET_ERROR)
-            return -1;
-    if(ret < 0)
-        return -1;
-#endif
+
   //lgeneric_dout(cct, DBL) << "tcp_write writing " << len << dendl;
   assert(len > 0);
   while (len > 0) {
-#ifdef _WIN32
-    int did = ::send( sd, buf, len, 0 );
-    if(did == SOCKET_ERROR)
-            return -1;
-#else
     int did = ::send( sd, buf, len, MSG_NOSIGNAL );
-#endif
     if (did < 0) {
-      //lgeneric_dout(cct, 1) << "tcp_write error did = " << did << "  errno " << errno << " " << strerror(errno) << dendl;
-      //lgeneric_derr(cct, 1) << "tcp_write error did = " << did << "  errno " << errno << " " << strerror(errno) << dendl;
+      //lgeneric_dout(cct, 1) << "tcp_write error did = " << did << " " << cpp_strerror(errno) << dendl;
+      //lgeneric_derr(cct, 1) << "tcp_write error did = " << did << " " << cpp_strerror(errno) << dendl;
       return did;
     }
     len -= did;
@@ -2654,45 +2512,3 @@ int Pipe::tcp_write(const char *buf, int len)
   }
   return 0;
 }
-#ifdef _WIN32
-int pipe_cloexec(int pipefd[2])
-{
-  int ret;
-
-
-#if defined(HAVE_PIPE2) && defined(O_CLOEXEC)
-  ret = pipe2(pipefd, O_CLOEXEC);
-  if (ret == -1)
-    return -errno;
-  return 0;
-#else
-  //ret = pipe(pipefd);
-  //if (ret == -1)
-  //  return -errno;
-
-  /*
-   * The old-fashioned, race-condition prone way that we have to fall
-   * back on if O_CLOEXEC does not exist.
-   */
-  ret = socket(pipefd[0], F_SETFD, FD_CLOEXEC);
-  if (ret == -1) {
-    ret = -errno;
-    goto out;
-  }
-
-  ret = socket(pipefd[1], F_SETFD, FD_CLOEXEC);
-  if (ret == -1) {
-    ret = -errno;
-    goto out;
-  }
-
-  return 0;
-
-out:
-  VOID_TEMP_FAILURE_RETRY(close(pipefd[0]));
-  VOID_TEMP_FAILURE_RETRY(close(pipefd[1]));
-
-  return ret;
-#endif
-}
-#endif

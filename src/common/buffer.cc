@@ -24,16 +24,11 @@
 #include "common/Mutex.h"
 #include "include/types.h"
 #include "include/compat.h"
-# if defined(HAVE_XIO)
-#  include "msg/xio/XioMsg.h"
-#  endif
-#include "include/buffer.h"
-
 
 #include <errno.h>
 #include <fstream>
 #include <sstream>
-
+#include <sys/uio.h>
 #include <limits.h>
 
 namespace ceph {
@@ -220,11 +215,9 @@ static simple_spinlock_t buffer_debug_lock = SIMPLE_SPINLOCK_INITIALIZER;
       return new raw_malloc(len);
     }
   };
-/*  
-#ifdef _WIN32
-#else
+
 #ifndef __CYGWIN__
-class buffer::raw_mmap_pages : public buffer::raw {
+  class buffer::raw_mmap_pages : public buffer::raw {
   public:
     raw_mmap_pages(unsigned l) : raw(l) {
       data = (char*)::mmap(NULL, len, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_ANON, -1, 0);
@@ -256,8 +249,7 @@ class buffer::raw_mmap_pages : public buffer::raw {
       int r = ::posix_memalign((void**)(void*)&data, align, len);
       if (r)
 	throw bad_alloc();
-#endif /* DARWIN 
-
+#endif /* DARWIN */
       if (!data)
 	throw bad_alloc();
       inc_total_alloc(len);
@@ -273,9 +265,8 @@ class buffer::raw_mmap_pages : public buffer::raw {
     }
   };
 #endif
-*/
+
 #ifdef __CYGWIN__
-#endif
   class buffer::raw_hack_aligned : public buffer::raw {
     unsigned align;
     char *realdata;
@@ -302,7 +293,7 @@ class buffer::raw_mmap_pages : public buffer::raw {
       return new raw_hack_aligned(len, align);
     }
   };
-
+#endif
 
 #ifdef CEPH_HAVE_SPLICE
   class buffer::raw_pipe : public buffer::raw {
@@ -537,61 +528,7 @@ class buffer::raw_mmap_pages : public buffer::raw {
       return new buffer::raw_char(len);
     }
   };
-#ifdef _WIN32
-#else
-#if defined(HAVE_XIO)
-  class buffer::xio_msg_buffer : public buffer::raw {
-  private:
-    XioDispatchHook* m_hook;
-  public:
-    xio_msg_buffer(XioDispatchHook* _m_hook, const char *d,
-	unsigned l) :
-      raw((char*)d, l), m_hook(_m_hook->get()) {}
 
-    bool is_shareable() { return false; }
-    static void operator delete(void *p)
-    {
-      xio_msg_buffer *buf = static_cast<xio_msg_buffer*>(p);
-      // return hook ref (counts against pool);  it appears illegal
-      // to do this in our dtor, because this fires after that
-      buf->m_hook->put();
-    }
-    raw* clone_empty() {
-      return new buffer::raw_char(len);
-    }
-  };
-
-  class buffer::xio_mempool : public buffer::raw {
-  public:
-    struct xio_mempool_obj *mp;
-    xio_mempool(struct xio_mempool_obj *_mp, unsigned l) :
-      raw((char*)mp->addr, l), mp(_mp)
-    { }
-    ~xio_mempool() {}
-    raw* clone_empty() {
-      return new buffer::raw_char(len);
-    }
-  };
-
-  struct xio_mempool_obj* get_xio_mp(const buffer::ptr& bp)
-  {
-    buffer::xio_mempool *mb = dynamic_cast<buffer::xio_mempool*>(bp.get_raw());
-    if (mb) {
-      return mb->mp;
-    }
-    return NULL;
-  }
-
-  buffer::raw* buffer::create_msg(
-      unsigned len, char *buf, XioDispatchHook* m_hook) {
-    XioPool& pool = m_hook->get_pool();
-    buffer::raw* bp =
-      static_cast<buffer::raw*>(pool.alloc(sizeof(xio_msg_buffer)));
-    new (bp) xio_msg_buffer(m_hook, buf, len);
-    return bp;
-  }
-#endif /* HAVE_XIO */
-#endif
   buffer::raw* buffer::copy(const char *c, unsigned len) {
     raw* r = new raw_char(len);
     memcpy(r->data, c, len);
@@ -612,15 +549,14 @@ class buffer::raw_mmap_pages : public buffer::raw {
   buffer::raw* buffer::create_static(unsigned len, char *buf) {
     return new raw_static(buf, len);
   }
-
   buffer::raw* buffer::create_aligned(unsigned len, unsigned align) {
-    #if defined(__CYGWIN__) || defined(_WIN32)
-      return new raw_hack_aligned(len, align);
-    #else
-      return new raw_posix_aligned(len, align);
-    #endif
+#ifndef __CYGWIN__
+    //return new raw_mmap_pages(len);
+    return new raw_posix_aligned(len, align);
+#else
+    return new raw_hack_aligned(len, align);
+#endif
   }
-
   buffer::raw* buffer::create_page_aligned(unsigned len) {
     return create_aligned(len, CEPH_PAGE_SIZE);
   }
@@ -1369,15 +1305,15 @@ void buffer::list::rebuild_page_aligned()
       // put what we can into the existing append_buffer.
       unsigned gap = append_buffer.unused_tail_length();
       if (gap > 0) {
-      	if (gap > len) gap = len;
-      	// cout << "append first char is " << data[0] << ", last char is " << data[len-1] << std::endl;
-      	append_buffer.append(data, gap);
-      	append(append_buffer, append_buffer.end() - gap, gap);	// add segment to the list
-      	len -= gap;
-      	data += gap;
+	if (gap > len) gap = len;
+	//cout << "append first char is " << data[0] << ", last char is " << data[len-1] << std::endl;
+	append_buffer.append(data, gap);
+	append(append_buffer, append_buffer.end() - gap, gap);	// add segment to the list
+	len -= gap;
+	data += gap;
       }
       if (len == 0)
-      	break;  // done!
+	break;  // done!
       
       // make a new append_buffer!
       unsigned alen = CEPH_PAGE_SIZE * (((len-1) / CEPH_PAGE_SIZE) + 1);
@@ -1744,7 +1680,6 @@ int buffer::list::write_file(const char *fn, int mode)
 
 int buffer::list::write_fd(int fd) const
 {
-/*
   if (can_zero_copy())
     return write_fd_zero_copy(fd);
 
@@ -1794,9 +1729,8 @@ int buffer::list::write_fd(int fd) const
       iovlen = 0;
       bytes = 0;
     }
-  }*/
+  }
   return 0;
-
 }
 
 int buffer::list::write_fd_zero_copy(int fd) const

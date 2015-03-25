@@ -5,9 +5,7 @@
 #define __CEPH_LOG_LOG_H
 
 #include "common/Thread.h"
-#ifdef _WIN32
-#include <winsock2.h>
-#endif
+
 #include <pthread.h>
 
 #include "Entry.h"

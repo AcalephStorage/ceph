@@ -20,10 +20,8 @@
 #include "include/interval_set.h"
 
 #include "inode_backtrace.h"
-#ifdef _WIN32
-#else
+
 #include <boost/pool/pool.hpp>
-#endif
 #include "include/assert.h"
 #include "include/hash_namespace.h"
 #include <boost/serialization/strong_typedef.hpp>
@@ -413,10 +411,7 @@ struct inode_t {
   version_t xattr_version;
 
   version_t backtrace_version;
-#ifdef _WIN32
-#else
-  snapid_t oldest_snap;
-#endif
+
   inode_t() : ino(0), rdev(0),
 	      mode(0), uid(0), gid(0), nlink(0),
 	      size(0), max_size_ever(0),
@@ -1117,13 +1112,12 @@ public:
 
 //#define MDS_PIN_REPLICATED     1
 //#define MDS_STATE_AUTH     (1<<0)
-#ifdef _WIN32
-#else
+
 class MLock;
 class SimpleLock;
 
 class MDSCacheObject;
-#endif
+
 typedef std::pair<mds_rank_t, mds_rank_t> mds_authority_t;
 // -- authority delegation --
 // directory authority types
@@ -1139,8 +1133,6 @@ typedef std::pair<mds_rank_t, mds_rank_t> mds_authority_t;
 /*
  * for metadata leases to clients
  */
-#ifdef _WIN32
-#else
 struct ClientLease {
   client_t client;
   MDSCacheObject *parent;
@@ -1166,7 +1158,7 @@ std::ostream& operator<<(std::ostream& out, mdsco_db_line_prefix o);
 
 // printer
 std::ostream& operator<<(std::ostream& out, MDSCacheObject &o);
-#endif
+
 class MDSCacheObjectInfo {
 public:
   inodeno_t ino;
@@ -1191,8 +1183,7 @@ inline bool operator==(const MDSCacheObjectInfo& l, const MDSCacheObjectInfo& r)
 
 WRITE_CLASS_ENCODER(MDSCacheObjectInfo)
 
-#ifdef _WIN32
-#else
+
 class MDSCacheObject {
  public:
   // -- pins --
@@ -1532,7 +1523,7 @@ inline std::ostream& operator<<(std::ostream& out, mdsco_db_line_prefix o) {
   o.object->print_db_line_prefix(out);
   return out;
 }
-#endif
+
 
 
 

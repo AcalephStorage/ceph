@@ -11,9 +11,7 @@
 #ifdef __CEPH__
 # include "acconfig.h"
 #endif
-#ifdef _WIN32
-#define __STRING(x) #x //by ketor
-#endif
+
 class CephContext;
 
 #ifdef __cplusplus

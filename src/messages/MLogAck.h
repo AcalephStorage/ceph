@@ -14,10 +14,9 @@
 
 #ifndef CEPH_MLOGACK_H
 #define CEPH_MLOGACK_H
-#ifdef _WIN32
-#else
+
 #include <uuid/uuid.h>
-#endif
+
 class MLogAck : public Message {
 public:
   uuid_d fsid;

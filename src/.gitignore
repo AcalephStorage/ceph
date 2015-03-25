@@ -1,16 +1,16 @@
 # generic entries
-# Makefile
+Makefile
 
 # local directory specific entries
 /.git_version
 /.libs
+/acconfig.h*
 /ceph
 /cephfs
 /crushtool
 /ceph-authtool
 /ceph-client-debug
 /cephfs-journal-tool
-/cephfs-table-tool
 /ceph-conf
 /ceph-coverage
 /ceph-crush-location
@@ -25,11 +25,11 @@
 /ceph.conf
 /ceph_bench_log
 /ceph-objectstore-tool
+/ceph_mon_store_converter
 /ceph_multi_stress_watch
 /ceph_erasure_code
 /ceph_erasure_code_benchmark
 /ceph_erasure_code_non_regression
-/ceph_perf_objectstore
 /ceph_psim
 /ceph_radosacl
 /ceph_rgw_jsonparser
@@ -49,8 +49,8 @@
 /ceph-monstore-tool
 /ceph-osdomap-tool
 /ceph-kvstore-tool
+/ceph_ver.h
 /dev
-/get_command_descriptions
 /init-ceph
 /keyring
 /librados-config
@@ -69,8 +69,6 @@
 /rbd-replay-prep
 /rest-bench
 /sample.fetch_config
-/simple_client
-/simple_server
 /TAGS
 /tags
 /testmsgr
@@ -78,10 +76,9 @@
 /test-suite.log
 /cls_test_*
 /unittest_*
-/xio_client
-/xio_server
+/get_command_descriptions
+/ceph_perf_objectstore
 
 # old dir, may in use by older branches
 /leveldb
 /mkcephfs
-/.ceph_port

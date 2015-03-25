@@ -513,9 +513,7 @@ int FileJournal::open(uint64_t fs_op_seq)
 
   // looks like a valid header.
   write_pos = 0;  // not writeable yet
-#ifdef _WIN32
-  journaled_seq = header.committed_up_to;
-#endif
+
   // find next entry
   read_pos = header.start;
   uint64_t seq = header.start_seq;
@@ -643,11 +641,6 @@ void FileJournal::stop_writer()
     Mutex::Locker p(writeq_lock);
     write_stop = true;
     writeq_cond.Signal();
-#ifdef _WIN32
-    // Doesn't hurt to signal commit_cond in case thread is waiting there
-    // and caller didn't use committed_thru() first.
-    commit_cond.Signal();
-#endif
   }
   write_thread.join();
 
@@ -1085,16 +1078,11 @@ void FileJournal::do_write(bufferlist& bl)
      * NOTE: using sync_file_range here would not be safe as it does not
      * flush disk caches or commits any sort of metadata.
      */
-    int ret = 0;
 #if defined(DARWIN) || defined(__FreeBSD__)
-    ret = ::fsync(fd);
+    ::fsync(fd);
 #else
-    ret = ::fdatasync(fd);
+    ::fdatasync(fd);
 #endif
-    if (ret < 0) {
-      derr << __func__ << " fsync/fdatasync failed: " << cpp_strerror(errno) << dendl;
-      ceph_abort();
-    }
 #ifdef HAVE_POSIX_FADVISE
     if (g_conf->filestore_fadvise)
       posix_fadvise(fd, 0, 0, POSIX_FADV_DONTNEED);
@@ -1198,23 +1186,11 @@ void FileJournal::write_thread_entry()
 
     bufferlist bl;
     int r = prepare_multi_write(bl, orig_ops, orig_bytes);
-    // Don't care about journal full if stoppping, so drop queue and
-    // possibly let header get written and loop above to notice stop
     if (r == -ENOSPC) {
-      if (write_stop) {
-	dout(20) << "write_thread_entry full and stopping, throw out queue and finish up" << dendl;
-	while (!writeq_empty()) {
-	  put_throttle(1, peek_write().bl.length());
-	  pop_write();
-	}  
-	print_header();
-	r = 0;
-      } else {
-	dout(20) << "write_thread_entry full, going to sleep (waiting for commit)" << dendl;
-	commit_cond.Wait(write_lock);
-	dout(20) << "write_thread_entry woke up" << dendl;
-	continue;
-      }
+      dout(20) << "write_thread_entry full, going to sleep (waiting for commit)" << dendl;
+      commit_cond.Wait(write_lock);
+      dout(20) << "write_thread_entry woke up" << dendl;
+      continue;
     }
     assert(r == 0);
 
@@ -1752,8 +1728,6 @@ bool FileJournal::read_entry(
     } else {
       read_pos = next_pos;
       next_seq = seq;
-      if (seq > journaled_seq)
-        journaled_seq = seq;
       return true;
     }
   }
@@ -1779,14 +1753,13 @@ bool FileJournal::read_entry(
 }
 
 FileJournal::read_entry_result FileJournal::do_read_entry(
-  off64_t init_pos,
+  off64_t pos,
   off64_t *next_pos,
   bufferlist *bl,
   uint64_t *seq,
   ostream *ss,
   entry_header_t *_h)
 {
-  off64_t cur_pos = init_pos;
   bufferlist _bl;
   if (!bl)
     bl = &_bl;
@@ -1795,40 +1768,40 @@ FileJournal::read_entry_result FileJournal::do_read_entry(
   entry_header_t *h;
   bufferlist hbl;
   off64_t _next_pos;
-  wrap_read_bl(cur_pos, sizeof(*h), &hbl, &_next_pos);
+  wrap_read_bl(pos, sizeof(*h), &hbl, &_next_pos);
   h = reinterpret_cast<entry_header_t *>(hbl.c_str());
 
-  if (!h->check_magic(cur_pos, header.get_fsid64())) {
-    dout(25) << "read_entry " << init_pos
+  if (!h->check_magic(pos, header.get_fsid64())) {
+    dout(25) << "read_entry " << pos
 	     << " : bad header magic, end of journal" << dendl;
     if (ss)
       *ss << "bad header magic";
     if (next_pos)
-      *next_pos = init_pos + (4<<10); // check 4k ahead
+      *next_pos = pos + (4<<10); // check 4k ahead
     return MAYBE_CORRUPT;
   }
-  cur_pos = _next_pos;
+  pos = _next_pos;
 
   // pad + body + pad
   if (h->pre_pad)
-    cur_pos += h->pre_pad;
+    pos += h->pre_pad;
 
   bl->clear();
-  wrap_read_bl(cur_pos, h->len, bl, &cur_pos);
+  wrap_read_bl(pos, h->len, bl, &pos);
 
   if (h->post_pad)
-    cur_pos += h->post_pad;
+    pos += h->post_pad;
 
   // footer
   entry_header_t *f;
   bufferlist fbl;
-  wrap_read_bl(cur_pos, sizeof(*f), &fbl, &cur_pos);
+  wrap_read_bl(pos, sizeof(*f), &fbl, &pos);
   f = reinterpret_cast<entry_header_t *>(fbl.c_str());
   if (memcmp(f, h, sizeof(*f))) {
     if (ss)
       *ss << "bad footer magic, partial entry";
     if (next_pos)
-      *next_pos = cur_pos;
+      *next_pos = pos;
     return MAYBE_CORRUPT;
   }
 
@@ -1840,13 +1813,13 @@ FileJournal::read_entry_result FileJournal::do_read_entry(
 	*ss << "header crc (" << h->crc32c
 	    << ") doesn't match body crc (" << actual_crc << ")";
       if (next_pos)
-	*next_pos = cur_pos;
+	*next_pos = pos;
       return MAYBE_CORRUPT;
     }
   }
 
   // yay!
-  dout(2) << "read_entry " << init_pos << " : seq " << h->seq
+  dout(2) << "read_entry " << pos << " : seq " << h->seq
 	  << " " << h->len << " bytes"
 	  << dendl;
 
@@ -1858,15 +1831,15 @@ FileJournal::read_entry_result FileJournal::do_read_entry(
   // bind by reference to (packed) h->seq
   journalq.push_back(
     pair<uint64_t,off64_t>(static_cast<uint64_t>(h->seq),
-			   static_cast<off64_t>(init_pos)));
+			   static_cast<off64_t>(pos)));
 
   if (next_pos)
-    *next_pos = cur_pos;
+    *next_pos = pos;
 
   if (_h)
     *_h = *h;
 
-  assert(cur_pos % header.alignment == 0);
+  assert(pos % header.alignment == 0);
   return SUCCESS;
 }
 

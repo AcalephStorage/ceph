@@ -173,7 +173,7 @@
        const hobject_t &hoid) = 0;
 
      virtual void log_operation(
-       const vector<pg_log_entry_t> &logv,
+       vector<pg_log_entry_t> &logv,
        boost::optional<pg_hit_set_history_t> &hset_history,
        const eversion_t &trim_to,
        const eversion_t &trim_rollback_to,
@@ -314,7 +314,7 @@
     * won't be called after on_change()
     */
    virtual void on_change() = 0;
-   virtual void clear_recovery_state() = 0;
+   virtual void clear_state() = 0;
 
    virtual void on_flushed() = 0;
 
@@ -503,7 +503,7 @@
      PGTransaction *t,                    ///< [in] trans to execute
      const eversion_t &trim_to,           ///< [in] trim log to here
      const eversion_t &trim_rollback_to,  ///< [in] trim rollback info to here
-     const vector<pg_log_entry_t> &log_entries, ///< [in] log entries for t
+     vector<pg_log_entry_t> &log_entries, ///< [in] log entries for t
      /// [in] hitset history (if updated with this transaction)
      boost::optional<pg_hit_set_history_t> &hset_history,
      Context *on_local_applied_sync,      ///< [in] called when applied locally
@@ -598,7 +598,7 @@
      bool okseed,
      const ScrubMap::object &candidate,
      ostream &errorstream);
-   map<pg_shard_t, ScrubMap *>::const_iterator be_select_auth_object(
+   list<map<pg_shard_t, ScrubMap *>::const_iterator> be_select_auth_object(
      const hobject_t &obj,
      const map<pg_shard_t,ScrubMap*> &maps,
      bool okseed,

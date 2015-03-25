@@ -21,16 +21,13 @@
 
 class CInode;
 class MDS;
-class PerfCounters;
 
 class RecoveryQueue {
 public:
   void enqueue(CInode *in);
   void advance();
   void prioritize(CInode *in);   ///< do this inode now/soon
-  RecoveryQueue(MDS *mds_) : mds(mds_), logger(NULL) {}
-
-  void set_logger(PerfCounters *p) {logger=p;}
+  RecoveryQueue(MDS *mds_) : mds(mds_) {}
 
 private:
   void _start(CInode *in);  ///< start recovering this file
@@ -40,7 +37,6 @@ private:
   std::set<CInode*> file_recovering;
   void _recovered(CInode *in, int r, uint64_t size, utime_t mtime);
   MDS *mds;
-  PerfCounters *logger;
 
   friend class C_MDC_Recover;
 };

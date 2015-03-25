@@ -4,7 +4,6 @@
 #include "ObjectStore.h"
 #include "common/Formatter.h"
 
-#pragma GCC diagnostic ignored "-Wpragmas"
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wdeprecated-declarations"
 
@@ -505,7 +504,6 @@ void ObjectStore::Transaction::_build_actions_from_tbl()
 }
 
 #pragma GCC diagnostic pop
-#pragma GCC diagnostic warning "-Wpragmas"
 
 void ObjectStore::Transaction::dump(ceph::Formatter *f)
 {
@@ -934,7 +932,6 @@ void ObjectStore::Transaction::dump(ceph::Formatter *f)
   f->close_section();
 }
 
-#pragma GCC diagnostic ignored "-Wpragmas"
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wdeprecated-declarations"
 
@@ -984,4 +981,3 @@ void ObjectStore::Transaction::generate_test_instances(list<ObjectStore::Transac
 }
 
 #pragma GCC diagnostic pop
-#pragma GCC diagnostic warning "-Wpragmas"

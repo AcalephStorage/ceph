@@ -1,7 +1,6 @@
-#ifdef _WIN32
-#else
+
 #include <syslog.h>
-#endif
+
 #include <boost/algorithm/string.hpp>
 
 #include "LogEntry.h"
@@ -45,8 +44,6 @@ void LogEntryKey::generate_test_instances(list<LogEntryKey*>& o)
 
 int clog_type_to_syslog_level(clog_type t)
 {
-#ifdef _WIN32
-#else
   switch (t) {
     case CLOG_DEBUG:
       return LOG_DEBUG;
@@ -62,7 +59,6 @@ int clog_type_to_syslog_level(clog_type t)
       assert(0);
       return 0;
   }
-#endif
 }
 
 clog_type string_to_clog_type(const string& s)
@@ -89,8 +85,6 @@ clog_type string_to_clog_type(const string& s)
 
 int string_to_syslog_level(string s)
 {
-#ifdef _WIN32
-#else
   if (boost::iequals(s, "debug"))
     return LOG_DEBUG;
   if (boost::iequals(s, "info") ||
@@ -109,13 +103,10 @@ int string_to_syslog_level(string s)
 
   // err on the side of noise!
   return LOG_DEBUG;
-#endif
 }
 
 int string_to_syslog_facility(string s)
 {
-#ifdef _WIN32
-#else
   if (boost::iequals(s, "auth"))
     return LOG_AUTH;
   if (boost::iequals(s, "authpriv"))
@@ -159,7 +150,6 @@ int string_to_syslog_facility(string s)
 
   // default to USER
   return LOG_USER;
-#endif
 }
 
 string clog_type_to_string(clog_type t)
@@ -183,9 +173,6 @@ string clog_type_to_string(clog_type t)
 
 void LogEntry::log_to_syslog(string level, string facility)
 {
-#ifdef _WIN32
-	printf("%s", stringify(*this).c_str());
-#else
   int min = string_to_syslog_level(level);
   int l = clog_type_to_syslog_level(prio);
   if (l <= min) {
@@ -195,7 +182,6 @@ void LogEntry::log_to_syslog(string level, string facility)
 	   (long long unsigned)seq,
 	   msg.c_str());
   }
-#endif
 }
 
 void LogEntry::encode(bufferlist& bl) const

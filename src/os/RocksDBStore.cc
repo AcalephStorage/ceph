@@ -153,7 +153,6 @@ RocksDBStore::~RocksDBStore()
 
   // Ensure db is destroyed before dependent db_cache and filterpolicy
   delete db;
-  delete filterpolicy;
 }
 
 void RocksDBStore::close()

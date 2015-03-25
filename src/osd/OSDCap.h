@@ -91,6 +91,7 @@ struct OSDCapMatch {
   /**
    * check if given request parameters match our constraints
    *
+   * @param auid requesting user's auid
    * @param pool_name pool name
    * @param nspace_name namespace name
    * @param pool_auid pool's auid

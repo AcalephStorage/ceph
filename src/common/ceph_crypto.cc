@@ -31,7 +31,6 @@ void ceph::crypto::shutdown()
 }
 
 // nothing
-/*
 ceph::crypto::HMACSHA1::~HMACSHA1()
 {
 }
@@ -71,4 +70,4 @@ ceph::crypto::HMACSHA1::~HMACSHA1()
 
 #else
 # error "No supported crypto implementation found."
-*/#endif
+#endif

@@ -20,10 +20,9 @@
 #include "include/types.h"
 
 #include "mds/MDSMap.h"
-#ifdef _WIN32
-#else
+
 #include <uuid/uuid.h>
-#endif
+
 
 
 /**

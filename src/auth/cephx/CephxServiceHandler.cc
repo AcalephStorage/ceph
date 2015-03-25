@@ -15,13 +15,10 @@
 
 #include "CephxServiceHandler.h"
 #include "CephxProtocol.h"
-#ifdef _WIN32
-#include "auth/cephx/CephxKeyServer.h"
-#else
-#include "mon/Monitor.h"
-#endif
+
 #include "../Auth.h"
 
+#include "mon/Monitor.h"
 
 #include <errno.h>
 #include <sstream>

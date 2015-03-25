@@ -56,8 +56,8 @@ class ObjectCacher {
     snapid_t snap;
     map<object_t, bufferlist*> read_data;  // bits of data as they come back
     bufferlist *bl;
-    int fadvise_flags;
-    OSDRead(snapid_t s, bufferlist *b, int f) : snap(s), bl(b), fadvise_flags(f) {}
+    int flags;
+    OSDRead(snapid_t s, bufferlist *b, int f) : snap(s), bl(b), flags(f) {}
   };
 
   OSDRead *prepare_read(snapid_t snap, bufferlist *b, int f) {
@@ -70,13 +70,11 @@ class ObjectCacher {
     SnapContext snapc;
     bufferlist bl;
     utime_t mtime;
-    int fadvise_flags;
-    OSDWrite(const SnapContext& sc, const bufferlist& b, utime_t mt, int f)
-      : snapc(sc), bl(b), mtime(mt), fadvise_flags(f) {}
+    int flags;
+    OSDWrite(const SnapContext& sc, bufferlist& b, utime_t mt, int f) : snapc(sc), bl(b), mtime(mt), flags(f) {}
   };
 
-  OSDWrite *prepare_write(const SnapContext& sc, const bufferlist &b,
-			  utime_t mt, int f) { 
+  OSDWrite *prepare_write(const SnapContext& sc, bufferlist &b, utime_t mt, int f) { 
     return new OSDWrite(sc, b, mt, f); 
   }
 
@@ -101,8 +99,7 @@ class ObjectCacher {
     struct {
       loff_t start, length;   // bh extent in object
     } ex;
-    bool dontneed; //indicate bh don't need by anyone
-
+        
   public:
     Object *ob;
     bufferlist  bl;
@@ -118,7 +115,6 @@ class ObjectCacher {
     BufferHead(Object *o) : 
       state(STATE_MISSING),
       ref(0),
-      dontneed(false),
       ob(o),
       last_write_tid(0),
       last_read_tid(0),
@@ -162,13 +158,6 @@ class ObjectCacher {
       --ref;
       return ref;
     }
-
-    void set_dontneed(bool v) {
-      dontneed = v;
-    }
-    bool get_dontneed() {
-      return dontneed;
-    }
   };
 
   // ******* Object *********
@@ -181,7 +170,6 @@ class ObjectCacher {
     friend struct ObjectSet;
 
   public:
-    uint64_t object_no;
     ObjectSet *oset;
     xlist<Object*>::item set_item;
     object_locator_t oloc;
@@ -205,11 +193,11 @@ class ObjectCacher {
     Object(const Object& other);
     const Object& operator=(const Object& other);
 
-    Object(ObjectCacher *_oc, sobject_t o, uint64_t ono, ObjectSet *os,
-	   object_locator_t& l, uint64_t ts, uint64_t tq) :
+    Object(ObjectCacher *_oc, sobject_t o, ObjectSet *os, object_locator_t& l,
+	   uint64_t ts, uint64_t tq) :
       ref(0),
       oc(_oc),
-      oid(o), object_no(ono), oset(os), set_item(this), oloc(l),
+      oid(o), oset(os), set_item(this), oloc(l),
       truncate_size(ts), truncate_seq(tq),
       complete(false), exists(true),
       last_write_tid(0), last_commit_tid(0),
@@ -230,7 +218,6 @@ class ObjectCacher {
     snapid_t get_snap() { return oid.snap; }
     ObjectSet *get_object_set() { return oset; }
     string get_namespace() { return oloc.nspace; }
-    uint64_t get_object_number() const { return object_no; }
     
     object_locator_t& get_oloc() { return oloc; }
     void set_object_locator(object_locator_t& l) { oloc = l; }
@@ -292,7 +279,6 @@ class ObjectCacher {
     void try_merge_bh(BufferHead *bh);
 
     bool is_cached(loff_t off, loff_t len);
-    bool include_all_cached_data(loff_t off, loff_t len);
     int map_read(OSDRead *rd,
                  map<loff_t, BufferHead*>& hits,
                  map<loff_t, BufferHead*>& missing,
@@ -387,9 +373,8 @@ class ObjectCacher {
     return NULL;
   }
 
-  Object *get_object(sobject_t oid, uint64_t object_no, ObjectSet *oset,
-		     object_locator_t &l, uint64_t truncate_size,
-		     uint64_t truncate_seq);
+  Object *get_object(sobject_t oid, ObjectSet *oset, object_locator_t &l,
+		     uint64_t truncate_size, uint64_t truncate_seq);
   void close_object(Object *ob);
 
   // bh stats
@@ -420,15 +405,10 @@ class ObjectCacher {
       bh_lru_dirty.lru_touch(bh);
     else
       bh_lru_rest.lru_touch(bh);
-
-    bh->set_dontneed(false);
     touch_ob(bh->ob);
   }
   void touch_ob(Object *ob) {
     ob_lru.lru_touch(ob);
-  }
-  void bottouch_ob(Object *ob) {
-    ob_lru.lru_bottouch(ob);
   }
 
   // bh states
@@ -453,11 +433,7 @@ class ObjectCacher {
   void bh_remove(Object *ob, BufferHead *bh);
 
   // io
-#ifdef _WIN32
   void bh_read(BufferHead *bh);
-#else
-  void bh_read(BufferHead *bh, int op_flags);
-#endif
   void bh_write(BufferHead *bh);
 
   void trim();
@@ -606,22 +582,14 @@ class ObjectCacher {
    * the return value is total bytes read
    */
   int readx(OSDRead *rd, ObjectSet *oset, Context *onfinish);
-#ifdef _WIN32
   int writex(OSDWrite *wr, ObjectSet *oset, Mutex& wait_on_lock,
 	     Context *onfreespace);
-#else
-  int writex(OSDWrite *wr, ObjectSet *oset, Context *onfreespace);
-#endif
   bool is_cached(ObjectSet *oset, vector<ObjectExtent>& extents, snapid_t snapid);
 
 private:
   // write blocking
-#ifdef _WIN32
   int _wait_for_write(OSDWrite *wr, uint64_t len, ObjectSet *oset, Mutex& lock,
 		      Context *onfreespace);
-#else
-  int _wait_for_write(OSDWrite *wr, uint64_t len, ObjectSet *oset, Context *onfreespace);
-#endif
   void maybe_wait_for_writeback(uint64_t len);
   bool _flush_set_finish(C_GatherBuilder *gather, Context *onfinish);
 
@@ -687,7 +655,7 @@ public:
     Striper::file_to_extents(cct, oset->ino, layout, offset, len, oset->truncate_size, rd->extents);
     return readx(rd, oset, onfinish);
   }
-#ifdef _WIN32
+
   int file_write(ObjectSet *oset, ceph_file_layout *layout, const SnapContext& snapc,
                  loff_t offset, uint64_t len, 
                  bufferlist& bl, utime_t mtime, int flags,
@@ -696,16 +664,7 @@ public:
     Striper::file_to_extents(cct, oset->ino, layout, offset, len, oset->truncate_size, wr->extents);
     return writex(wr, oset, wait_on_lock, NULL);
   }
-#else
-  int file_write(ObjectSet *oset, ceph_file_layout *layout, const SnapContext& snapc,
-                 loff_t offset, uint64_t len, 
-                 bufferlist& bl, utime_t mtime, int flags) {
-    OSDWrite *wr = prepare_write(snapc, bl, mtime, flags);
-    Striper::file_to_extents(cct, oset->ino, layout, offset, len, oset->truncate_size, wr->extents);
-    return writex(wr, oset, NULL);
-  }
 
-#endif
   bool file_flush(ObjectSet *oset, ceph_file_layout *layout, const SnapContext& snapc,
                   loff_t offset, uint64_t len, Context *onfinish) {
     vector<ObjectExtent> extents;

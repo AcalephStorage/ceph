@@ -15,11 +15,7 @@
 #ifndef OS_KEYVALUESTORE_H
 #define OS_KEYVALUESTORE_H
 
-#ifdef _WIN32
-#else
 #include "IndexManager.h"
-#endif
-
 #include "SequencerPosition.h"
 #include <string>
 #include <vector>

@@ -96,7 +96,8 @@ int MonMap::write(const char *fn)
   return bl.write_file(fn);
 }
 
-int MonMap::read(const char *fn) {
+int MonMap::read(const char *fn) 
+{
   // read
   bufferlist bl;
   std::string error;
@@ -263,8 +264,6 @@ int MonMap::build_initial(CephContext *cct, ostream& errout)
   // fsid from conf?
   if (!cct->_conf->fsid.is_zero()) {
     fsid = cct->_conf->fsid;
-    char s[37];
-    uuid_unparse(fsid.uuid, s);
   }
 
   // -m foo?

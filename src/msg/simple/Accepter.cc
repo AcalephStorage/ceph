@@ -11,15 +11,12 @@
  * Foundation.  See file COPYING.
  * 
  */
-#ifdef _WIN32
-#include <winsock2.h>
-#else
+
 #include <sys/socket.h>
 #include <netinet/tcp.h>
 #include <sys/uio.h>
-#include <poll.h>
-#endif
 #include <limits.h>
+#include <poll.h>
 
 #include "msg/Message.h"
 
@@ -42,9 +39,6 @@
 
 int Accepter::bind(const entity_addr_t &bind_addr, const set<int>& avoid_ports)
 {
-#ifdef _WIN32
-  return 0;
-#else
   const md_config_t *conf = msgr->cct->_conf;
   // bind to a socket
   ldout(msgr->cct,10) << "accepter.bind" << dendl;
@@ -175,14 +169,10 @@ int Accepter::bind(const entity_addr_t &bind_addr, const set<int>& avoid_ports)
   ldout(msgr->cct,1) << "accepter.bind my_inst.addr is " << msgr->get_myaddr()
 		     << " need_addr=" << msgr->get_need_addr() << dendl;
   return 0;
-#endif
 }
 
 int Accepter::rebind(const set<int>& avoid_ports)
 {
-#ifdef _WIN32
-  return 0;
-#else
   ldout(msgr->cct,1) << "accepter.rebind avoid " << avoid_ports << dendl;
   
   entity_addr_t addr = msgr->get_myaddr();
@@ -200,7 +190,6 @@ int Accepter::rebind(const set<int>& avoid_ports)
   if (r == 0)
     start();
   return r;
-#endif
 }
 
 int Accepter::start()
@@ -215,9 +204,6 @@ int Accepter::start()
 
 void *Accepter::entry()
 {
-#ifdef _WIN32
-  return 0;
-#else
   ldout(msgr->cct,10) << "accepter starting" << dendl;
   
   int errors = 0;
@@ -263,33 +249,27 @@ void *Accepter::entry()
   }
   ldout(msgr->cct,10) << "accepter stopping" << dendl;
   return 0;
-#endif
 }
 
 void Accepter::stop()
 {
   done = true;
   ldout(msgr->cct,10) << "stop accepter" << dendl;
-#ifndef _WIN32
+
   if (listen_sd >= 0) {
     ::shutdown(listen_sd, SHUT_RDWR);
   }
-#endif
+
   // wait for thread to stop before closing the socket, to avoid
   // racing against fd re-use.
-#ifdef _WIN32
-  join();
-#else
   if (is_started()) {
     join();
   }
-#endif
-#ifndef _WIN32
+
   if (listen_sd >= 0) {
     ::close(listen_sd);
     listen_sd = -1;
   }
-#endif
   done = false;
 }
 

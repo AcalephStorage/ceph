@@ -125,20 +125,7 @@ public:
 	  << std::endl;
     }
   }
-#ifdef _WIN32
-  //clear all strong reference from the lru.
-  void clear() {
-    while (true) {
-      VPtr val; // release any ref we have after we drop the lock
-      Mutex::Locker l(lock);
-      if (size == 0)
-        break;
 
-      val = lru.back().second;
-      lru_remove(lru.back().first);
-    }
-  }
-#endif
   void clear(const K& key) {
     VPtr val; // release any ref we have after we drop the lock
     {
@@ -205,39 +192,6 @@ public:
     }
     return val;
   }
-#ifdef _WIN32
-  bool get_next(const K &key, pair<K, VPtr> *next) {
-    pair<K, VPtr> r;
-    {
-      Mutex::Locker l(lock);
-      VPtr next_val;
-      typename map<K, pair<WeakVPtr, V*> >::iterator i = weak_refs.upper_bound(key);
-
-      while (i != weak_refs.end() &&
-	     !(next_val = i->second.first.lock()))
-	++i;
-
-      if (i == weak_refs.end())
-	return false;
-
-      if (next)
-	r = make_pair(i->first, next_val);
-    }
-    if (next)
-      *next = r;
-    return true;
-  }
-  bool get_next(const K &key, pair<K, V> *next) {
-    pair<K, VPtr> r;
-    bool found = get_next(key, &r);
-    if (!found || !next)
-      return found;
-    next->first = r.first;
-    assert(r.second);
-    next->second = *(r.second);
-    return found;
-  }
-#endif
 
   VPtr lookup(const K& key) {
     VPtr val;
@@ -264,48 +218,7 @@ public:
     }
     return val;
   }
-#ifdef _WIN32
-  VPtr lookup_or_create(const K &key) {
-    VPtr val;
-    list<VPtr> to_release;
-    {
-      Mutex::Locker l(lock);
-      bool retry = false;
-      do {
-	retry = false;
-	typename map<K, pair<WeakVPtr, V*> >::iterator i = weak_refs.find(key);
-	if (i != weak_refs.end()) {
-	  val = i->second.first.lock();
-	  if (val) {
-	    lru_add(key, val, &to_release);
-	    return val;
-	  } else {
-	    retry = true;
-	  }
-	}
-	if (retry)
-	  cond.Wait(lock);
-      } while (retry);
 
-      V *new_value = new V();
-      VPtr new_val(new_value, Cleanup(this, key));
-      weak_refs.insert(make_pair(key, make_pair(new_val, new_value)));
-      lru_add(key, new_val, &to_release);
-      return new_val;
-    }
-  }
-
-  /**
-   * empty()
-   *
-   * Returns true iff there are no live references left to anything that has been
-   * in the cache.
-   */
-  bool empty() {
-    Mutex::Locker l(lock);
-    return weak_refs.empty();
-  }
-#endif
   /***
    * Inserts a key if not present, or bumps it to the front of the LRU if
    * it is, and then gives you a reference to the value. If the key already
