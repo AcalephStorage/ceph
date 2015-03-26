@@ -354,7 +354,8 @@ int MonClient::init()
   Mutex::Locker l(monc_lock);
 
   string method;
-    if (cct->_conf->auth_supported.length() != 0)
+    if (!cct->_conf->auth_supported.empty())
+        
       method = cct->_conf->auth_supported;
     else if (entity_name.get_type() == CEPH_ENTITY_TYPE_OSD ||
              entity_name.get_type() == CEPH_ENTITY_TYPE_MDS ||
@@ -372,7 +373,8 @@ int MonClient::init()
     r = keyring->from_ceph_context(cct);
     if (r == -ENOENT) {
       auth_supported->remove_supported_auth(CEPH_AUTH_CEPHX);
-      if (auth_supported->get_supported_set().size() > 0) {
+
+    if (!auth_supported->get_supported_set().empty()) {
 	r = 0;
 	no_keyring_disabled_cephx = true;
       } else {
@@ -432,8 +434,9 @@ void MonClient::shutdown()
 
 int MonClient::authenticate(double timeout)
 {
+  ldout(cct,10) << "MonClient::authenticate(" << timeout << ")\n" << dendl;
   Mutex::Locker lock(monc_lock);
-
+  ldout(cct,10) << "MonClient::authenticate state: " << state << dendl;
   if (state == MC_STATE_HAVE_SESSION) {
     ldout(cct, 5) << "already authenticated" << dendl;
     return 0;
@@ -644,6 +647,7 @@ void MonClient::_reopen_session(int rank, string name)
   m->protocol = 0;
   m->monmap_epoch = monmap.get_epoch();
   __u8 struct_v = 1;
+  ldout(cct,5) << "m->auth_payload: " << &m->auth_payload << dendl;
   ::encode(struct_v, m->auth_payload);
   ::encode(auth_supported->get_supported_set(), m->auth_payload);
   ::encode(entity_name, m->auth_payload);
