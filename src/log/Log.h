@@ -5,7 +5,6 @@
 #define __CEPH_LOG_LOG_H
 
 #include "common/Thread.h"
-
 #include <pthread.h>
 
 #include "Entry.h"
