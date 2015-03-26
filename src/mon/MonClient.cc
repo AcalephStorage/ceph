@@ -355,7 +355,6 @@ int MonClient::init()
 
   string method;
     if (!cct->_conf->auth_supported.empty())
-        
       method = cct->_conf->auth_supported;
     else if (entity_name.get_type() == CEPH_ENTITY_TYPE_OSD ||
              entity_name.get_type() == CEPH_ENTITY_TYPE_MDS ||
