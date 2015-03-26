@@ -18,6 +18,7 @@
 
 #include <iostream>
 #include <string>
+#include <sstream>
 #include <pthread.h>
 #include <errno.h>
 
@@ -221,7 +222,7 @@ int librados::RadosClient::connect()
   ldout(cct, 1) << "starting objecter" << dendl;
 
   err = -ENOMEM;
-  objecter = new Objecter(cct, messenger, &monclient,
+  objecter = new (std::nothrow) Objecter(cct, messenger, &monclient,
 			  &finisher,
 			  cct->_conf->rados_mon_op_timeout,
 			  cct->_conf->rados_osd_op_timeout);
@@ -274,8 +275,19 @@ int librados::RadosClient::connect()
   err = 0;
 
  out:
-  if (err)
+  if (err) {
     state = DISCONNECTED;
+
+    if (objecter) {
+      delete objecter;
+      objecter = NULL;
+    }
+    if (messenger) {
+      delete messenger;
+      messenger = NULL;
+    }
+  }
+
   return err;
 }
 
@@ -348,20 +360,13 @@ int librados::RadosClient::create_ioctx(const char *name, IoCtxImpl **io)
     }
   }
 
-  *io = new librados::IoCtxImpl(this, objecter, poolid, name, CEPH_NOSNAP);
+  *io = new librados::IoCtxImpl(this, objecter, poolid, CEPH_NOSNAP);
   return 0;
 }
 
 int librados::RadosClient::create_ioctx(int64_t pool_id, IoCtxImpl **io)
 {
-  std::string pool_name;
-  int r = pool_get_name(pool_id, &pool_name);
-  if (r < 0) {
-    return r;
-  }
-
-  *io = new librados::IoCtxImpl(this, objecter, pool_id, pool_name.c_str(),
-                                CEPH_NOSNAP);
+  *io = new librados::IoCtxImpl(this, objecter, pool_id, CEPH_NOSNAP);
   return 0;
 }
 
@@ -423,7 +428,7 @@ int librados::RadosClient::wait_for_osdmap()
 {
   assert(!lock.is_locked_by_me());
 
-  if (objecter == NULL) {
+  if (state != CONNECTED) {
     return -ENOTCONN;
   }
 
@@ -656,6 +661,32 @@ void librados::RadosClient::blacklist_self(bool set) {
   objecter->blacklist_self(set);
 }
 
+int librados::RadosClient::blacklist_add(const string& client_address,
+					 uint32_t expire_seconds)
+{
+  entity_addr_t addr;
+  if (!addr.parse(client_address.c_str(), 0)) {
+    lderr(cct) << "unable to parse address " << client_address << dendl;
+    return -EINVAL;
+  }
+
+  std::stringstream cmd;
+  cmd << "{"
+      << "\"prefix\": \"osd blacklist\", "
+      << "\"blacklistop\": \"add\", "
+      << "\"addr\": \"" << client_address << "\"";
+  if (expire_seconds != 0) {
+    cmd << ", \"expire\": " << expire_seconds << ".0";
+  }
+  cmd << "}";
+
+  std::vector<std::string> cmds;
+  cmds.push_back(cmd.str());
+  bufferlist inbl;
+  int r = mon_command(cmds, inbl, NULL, NULL);
+  return r;
+}
+
 int librados::RadosClient::mon_command(const vector<string>& cmd,
 				       const bufferlist &inbl,
 				       bufferlist *outbl, string *outs)
@@ -764,6 +795,8 @@ int librados::RadosClient::pg_command(pg_t pgid, vector<string>& cmd,
 
 int librados::RadosClient::monitor_log(const string& level, rados_log_callback_t cb, void *arg)
 {
+  Mutex::Locker l(lock);
+
   if (cb == NULL) {
     // stop watch
     ldout(cct, 10) << __func__ << " removing cb " << (void*)log_cb << dendl;
@@ -813,29 +846,23 @@ void librados::RadosClient::handle_log(MLog *m)
 
     if (log_cb) {
       for (std::deque<LogEntry>::iterator it = m->entries.begin(); it != m->entries.end(); ++it) {
-	LogEntry e = *it;
-	ostringstream ss;
-	ss << e.stamp << " " << e.who.name << " " << e.prio << " " << e.msg;
-	string line = ss.str();
-	string who = stringify(e.who);
-	string level = stringify(e.prio);
-	struct timespec stamp;
-	e.stamp.to_timespec(&stamp);
+        LogEntry e = *it;
+        ostringstream ss;
+        ss << e.stamp << " " << e.who.name << " " << e.prio << " " << e.msg;
+        string line = ss.str();
+        string who = stringify(e.who);
+        string level = stringify(e.prio);
+        struct timespec stamp;
+        e.stamp.to_timespec(&stamp);
 
-	ldout(cct, 20) << __func__ << " delivering " << ss.str() << dendl;
-	log_cb(log_cb_arg, line.c_str(), who.c_str(),
-	       stamp.tv_sec, stamp.tv_nsec,
-	       e.seq, level.c_str(), e.msg.c_str());
+        ldout(cct, 20) << __func__ << " delivering " << ss.str() << dendl;
+        log_cb(log_cb_arg, line.c_str(), who.c_str(),
+               stamp.tv_sec, stamp.tv_nsec,
+               e.seq, level.c_str(), e.msg.c_str());
       }
-
-      /*
-	this was present in the old cephtool code, but does not appear to be necessary. :/
-
-	version_t v = log_last_version + 1;
-	ldout(cct, 10) << __func__ << " wanting " << log_watch << " ver " << v << dendl;
-	monclient.sub_want(log_watch, v, 0);
-      */
     }
+
+    monclient.sub_got(log_watch, log_last_version);
   }
 
   m->put();
