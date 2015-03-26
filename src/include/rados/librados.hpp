@@ -8,8 +8,13 @@
 #include <set>
 #include <vector>
 #include <utility>
+#ifdef _WIN32
+#include "include/memory.h"
+#include "include/buffer.h"
+#else
 #include "memory.h"
 #include "buffer.h"
+#endif
 
 #include "librados.h"
 #include "rados_types.hpp"
@@ -222,8 +227,8 @@ namespace librados
     OP_FADVISE_SEQUENTIAL = LIBRADOS_OP_FLAG_FADVISE_SEQUENTIAL,
     OP_FADVISE_WILLNEED = LIBRADOS_OP_FLAG_FADVISE_WILLNEED,
     OP_FADVISE_DONTNEED = LIBRADOS_OP_FLAG_FADVISE_DONTNEED,
+    OP_FADVISE_NOCACHE = LIBRADOS_OP_FLAG_FADVISE_NOCACHE,
   };
-
   class CEPH_RADOS_API ObjectOperationCompletion {
   public:
     virtual ~ObjectOperationCompletion() {}
@@ -619,7 +624,7 @@ namespace librados
 
     // get pool auid
     int get_auid(uint64_t *auid_);
-
+    uint64_t get_instance_id() const;
     std::string get_pool_name();
 
     bool pool_requires_alignment();
@@ -1104,7 +1109,8 @@ namespace librados
 
     /// get/wait for the most recent osdmap
     int wait_for_latest_osdmap();
-
+    int blacklist_add(const std::string& client_address,
+                      uint32_t expire_seconds);
     /*
      * pool aio
      *
