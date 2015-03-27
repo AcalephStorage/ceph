@@ -22,7 +22,6 @@
 #include "Clock.h"
 
 #include "include/Context.h"
-
 #include <pthread.h>
 
 class Cond {
