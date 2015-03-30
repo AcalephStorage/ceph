@@ -5,7 +5,6 @@
 #elif defined(__FreeBSD__)
 #include <sys/types.h>
 #endif
-
 #include "hash.h"
 
 /*
