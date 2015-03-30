@@ -26,7 +26,7 @@
 # endif
 #endif
 
-#if defined(__linux__)
+#if defined(__linux__) || defined _WIN32
 # if BYTE_ORDER == LITTLE_ENDIAN
 #  define CEPH_LITTLE_ENDIAN
 # elif BYTE_ORDER == BIG_ENDIAN
