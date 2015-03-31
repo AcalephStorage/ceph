@@ -17,11 +17,12 @@
 #include "include/util.h"
 #include "common/errno.h"
 #include "common/strtol.h"
-
+#ifdef _WIN32
+#else
 #ifdef HAVE_SYS_VFS_H
 #include <sys/vfs.h>
 #endif
-
+#endif
 // test if an entire buf is zero in 8-byte chunks
 bool buf_is_zero(const char *buf, size_t len)
 {
