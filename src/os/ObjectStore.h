@@ -19,20 +19,22 @@
 #include "include/types.h"
 #include "osd/osd_types.h"
 #include "common/TrackedOp.h"
+#ifndef _WIN32
 #include "common/WorkQueue.h"
+#endif
 #include "ObjectMap.h"
 
 #include <errno.h>
 #include <sys/stat.h>
 #include <vector>
 #include <map>
-
+#ifndef _WIN32
 #if defined(DARWIN) || defined(__FreeBSD__)
 #include <sys/statvfs.h>
 #else
 #include <sys/vfs.h>    /* or <sys/statfs.h> */
 #endif /* DARWIN */
-
+#endif
 #define OPS_PER_PTR 32
 
 class CephContext;
@@ -104,11 +106,12 @@ public:
    * @param journal path (or other descriptor) for journal (optional)
    * @param flags which filestores should check if applicable
    */
+
   static ObjectStore *create(CephContext *cct,
 			     const string& type,
 			     const string& data,
 			     const string& journal,
-			     osflagbits_t flag = 0);
+			     osflagbits_t flags = 0);
 
   Logger *logger;
 
@@ -336,8 +339,47 @@ public:
    * A and B.
    *
    */
+#ifdef _WIN32
+#define OP_NOP            0
+#define OP_TOUCH          9   // cid oid
+#define OP_WRITE         10  // cid oid offset len bl
+#define OP_ZERO          11  // cid oid offset len
+#define OP_TRUNCATE      12  // cid oid len
+#define OP_REMOVE        13  // cid oid
+#define OP_SETATTR       14  // cid oid attrname bl
+#define OP_SETATTRS      15  // cid oid attrset
+#define OP_RMATTR        16  // cid oid attrname
+#define OP_CLONE         17  // cid oid newoid
+#define OP_CLONERANGE    18  // cid oid newoid offset len
+#define OP_CLONERANGE2   30  // cid oid newoid srcoff len dstoff
+#define OP_TRIMCACHE     19  // cid oid offset len  **DEPRECATED**
+#define OP_MKCOLL        20  // cid
+#define OP_RMCOLL        21  // cid
+#define OP_COLL_ADD      22  // cid oldcid oid
+#define OP_COLL_REMOVE   23  // cid oid
+#define OP_COLL_SETATTR  24  // cid attrname bl
+#define OP_COLL_RMATTR   25  // cid attrname
+#define OP_COLL_SETATTRS  26  // cid attrset
+#define OP_COLL_MOVE     8   // newcid oldcid oid
+#define OP_STARTSYNC     27  // start a sync 
+#define OP_RMATTRS       28  // cid oid
+#define OP_COLL_RENAME        29  // cid newcid
+#define OP_OMAP_CLEAR  31   // cid
+#define OP_OMAP_SETKEYS  32 // cid attrset
+#define OP_OMAP_RMKEYS  33  // cid keyset
+#define OP_OMAP_SETHEADER  34 // cid header
+#define OP_SPLIT_COLLECTION  35 // cid bits destination
+#define OP_SPLIT_COLLECTION2 36  /* cid, bits, destination
+				    doesn't create the destination */
+#define OP_OMAP_RMKEYRANGE  37  // cid oid firstkey lastkey
+#define OP_COLL_MOVE_RENAME  38  // oldcid, oldoid, newcid, newoid
+    
+#define OP_SETALLOCHINT   39  // cid, oid, object_size, write_size
+#define OP_COLL_HINT      40 // cid, type, bl
+#endif
   class Transaction {
   public:
+#ifndef _WIN32
     enum {
       OP_NOP =          0,
       OP_TOUCH =        9,   // cid, oid
@@ -379,14 +421,14 @@ public:
       OP_COLL_MOVE_RENAME = 38,   // oldcid, oldoid, newcid, newoid
 
       OP_SETALLOCHINT = 39,  // cid, oid, object_size, write_size
-      OP_COLL_HINT = 40, // cid, type, bl
     };
 
-    // Transaction hint type
     enum {
-      COLL_HINT_EXPECTED_NUM_OBJECTS = 1,
+      COLL_HINT_EXPECTED_NUM_OBJECTS 1
     };
-
+#else
+#define COLL_HINT_EXPECTED_NUM_OBJECTS 1
+#endif
     struct Op {
       __le32 op;
       __le32 cid;
@@ -1651,7 +1693,7 @@ public:
     return apply_transactions(NULL, tls, ondisk);
   }
   unsigned apply_transactions(Sequencer *osr, list<Transaction*>& tls, Context *ondisk=0);
-
+#ifndef _WIN32
   int queue_transaction_and_cleanup(Sequencer *osr, Transaction* t,
 				    ThreadPool::TPHandle *handle = NULL) {
     list<Transaction *> tls;
@@ -1686,7 +1728,7 @@ public:
     Sequencer *osr, list<Transaction*>& tls,
     TrackedOpRef op = TrackedOpRef(),
     ThreadPool::TPHandle *handle = NULL) = 0;
-
+#endif
 
   int queue_transactions(
     Sequencer *osr,

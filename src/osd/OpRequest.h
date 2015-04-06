@@ -71,7 +71,10 @@ struct OpRequest : public TrackedOp {
   void set_class_read();
   void set_class_write();
   void set_pg_op();
-
+#ifndef _WIN32
+  bool need_promote();
+  void set_promote();
+#endif
   void _dump(utime_t now, Formatter *f) const;
 
   bool has_feature(uint64_t f) const {
@@ -136,13 +139,13 @@ public:
   void mark_reached_pg() {
     mark_flag_point(flag_reached_pg, "reached_pg");
   }
-  void mark_delayed(string s) {
+  void mark_delayed(const string& s) {
     mark_flag_point(flag_delayed, s);
   }
   void mark_started() {
     mark_flag_point(flag_started, "started");
   }
-  void mark_sub_op_sent(string s) {
+  void mark_sub_op_sent(const string& s) {
     mark_flag_point(flag_sub_op_sent, s);
   }
   void mark_commit_sent() {
@@ -164,7 +167,7 @@ public:
 
 private:
   void set_rmw_flags(int flags);
-  void mark_flag_point(uint8_t flag, string s);
+  void mark_flag_point(uint8_t flag, const string& s);
 };
 
 typedef OpRequest::Ref OpRequestRef;
