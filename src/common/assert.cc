@@ -11,8 +11,11 @@
  * Foundation.  See file COPYING.
  *
  */
-
+#ifdef _WIN32
+#include "common/BackTrace.h"
+#else
 #include "BackTrace.h"
+#endif
 #include "common/ceph_context.h"
 #include "common/config.h"
 #include "common/debug.h"
@@ -50,11 +53,13 @@ namespace ceph {
 
     char buf[8096];
     BackTrace *bt = new BackTrace(1);
+#ifdef _WIN32
     snprintf(buf, sizeof(buf),
 	     "%s: In function '%s' thread %llx time %s\n"
 	     "%s: %d: FAILED assert(%s)\n",
-	     file, func, (unsigned long long)pthread_self(), tss.str().c_str(),
+	     file, func, (unsigned long long)pthread_self().p, tss.str().c_str(),
 	     file, line, assertion);
+#else
     dout_emergency(buf);
 
     // TODO: get rid of this memory allocation.
@@ -124,6 +129,7 @@ namespace ceph {
     ba.vprintf(msg, args);
     va_end(args);
     ba.printf("\n");
+#endif
     dout_emergency(buf);
 
     // TODO: get rid of this memory allocation.
