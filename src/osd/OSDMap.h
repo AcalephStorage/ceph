@@ -244,9 +244,12 @@ private:
   epoch_t cluster_snapshot_epoch;
   string cluster_snapshot;
   bool new_blacklist_entries;
-
+  mutable uint64_t cached_up_osd_features;
   mutable bool crc_defined;
   mutable uint32_t crc;
+
+
+  void _calc_up_osd_features();
 
  public:
   bool have_crc() const { return crc_defined; }
@@ -259,6 +262,7 @@ private:
   friend class MDS;
 
  public:
+#ifdef _WIN32
   OSDMap() : epoch(0), 
 	     pool_max(-1),
 	     flags(0),
@@ -273,6 +277,23 @@ private:
 	     crush(new CrushWrapper) {
     memset(&fsid, 0, sizeof(fsid));
   }
+#else
+  OSDMap() : epoch(0), 
+	     pool_max(-1),
+	     flags(0),
+	     num_osd(0), max_osd(0),
+	     osd_addrs(new addrs_s),
+	     pg_temp(new map<pg_t,vector<int32_t> >),
+	     primary_temp(new map<pg_t,int32_t>),
+	     osd_uuid(new vector<uuid_d>),
+	     cluster_snapshot_epoch(0),
+	     new_blacklist_entries(false),
+	     cached_up_osd_features(0),
+	     crc_defined(false), crc(0),
+	     crush(new CrushWrapper) {
+    memset(&fsid, 0, sizeof(fsid));
+  }
+#endif
 
   // no copying
   /* oh, how i long for c++11...
@@ -331,6 +352,9 @@ public:
   void get_up_osds(set<int32_t>& ls) const;
   unsigned get_num_up_osds() const;
   unsigned get_num_in_osds() const;
+  unsigned get_num_pg_temp() const {
+    return pg_temp->size();
+  }
 
   int get_flags() const { return flags; }
   int test_flag(int f) const { return flags & f; }
@@ -650,9 +674,7 @@ public:
     return acting->size();
   }
   int pg_to_acting_osds(pg_t pg, vector<int>& acting) const {
-    int primary;
-    int r = pg_to_acting_osds(pg, &acting, &primary);
-    return r;
+    return pg_to_acting_osds(pg, &acting, NULL);
   }
   /**
    * This does not apply temp overrides and should not be used
