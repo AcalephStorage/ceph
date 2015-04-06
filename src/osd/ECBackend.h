@@ -18,7 +18,7 @@
 #include "OSD.h"
 #include "PGBackend.h"
 #include "osd_types.h"
-#include <boost/optional/optional_io.hpp>
+#include <boost/optional.hpp>
 #include "erasure-code/ErasureCodeInterface.h"
 #include "ECTransaction.h"
 #include "ECMsgTypes.h"
@@ -83,7 +83,7 @@ public:
   void check_recovery_sources(const OSDMapRef osdmap);
 
   void on_change();
-  void clear_recovery_state();
+  void clear_state();
 
   void on_flushed();
 
@@ -98,7 +98,7 @@ public:
     PGTransaction *t,
     const eversion_t &trim_to,
     const eversion_t &trim_rollback_to,
-    const vector<pg_log_entry_t> &log_entries,
+    vector<pg_log_entry_t> &log_entries,
     boost::optional<pg_hit_set_history_t> &hset_history,
     Context *on_local_applied_sync,
     Context *on_all_applied,

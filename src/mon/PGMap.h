@@ -267,24 +267,15 @@ public:
   void dump_pool_stats(Formatter *f) const;
   void dump_osd_stats(Formatter *f) const;
   void dump_delta(Formatter *f) const;
-  void dump_filtered_pg_stats(Formatter *f, set<pg_t>& pgs);
 
   void dump_pg_stats_plain(ostream& ss,
-			   const ceph::unordered_map<pg_t, pg_stat_t>& pg_stats,
-			   bool brief) const;
+			   const ceph::unordered_map<pg_t, pg_stat_t>& pg_stats) const;
   void get_stuck_stats(StuckPG type, utime_t cutoff,
 		       ceph::unordered_map<pg_t, pg_stat_t>& stuck_pgs) const;
   void dump_stuck(Formatter *f, StuckPG type, utime_t cutoff) const;
   void dump_stuck_plain(ostream& ss, StuckPG type, utime_t cutoff) const;
 
   void dump(ostream& ss) const;
-  void dump_basic(ostream& ss) const;
-  void dump_pg_stats(ostream& ss, bool brief) const;
-  void dump_pg_sum_stats(ostream& ss, bool header) const;
-  void dump_pool_stats(ostream& ss, bool header) const;
-  void dump_osd_stats(ostream& ss) const;
-  void dump_osd_sum_stats(ostream& ss) const;
-  void dump_filtered_pg_stats(ostream& ss, set<pg_t>& pgs);
 
   void dump_osd_perf_stats(Formatter *f) const;
   void print_osd_perf_stats(std::ostream *ss) const;
@@ -292,8 +283,6 @@ public:
   void dump_osd_blocked_by_stats(Formatter *f) const;
   void print_osd_blocked_by_stats(std::ostream *ss) const;
 
-  void get_filtered_pg_stats(string& state, int64_t poolid, int64_t osdid,
-                             bool primary, set<pg_t>& pgs);
   void recovery_summary(Formatter *f, list<string> *psl,
                         const pool_stat_t& delta_sum) const;
   void overall_recovery_summary(Formatter *f, list<string> *psl) const;

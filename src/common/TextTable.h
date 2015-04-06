@@ -118,9 +118,7 @@ public:
     }
 
     // now store the rendered item with its proper width
-#ifndef _WIN32
     oss << std::setw(width) << item;
-#endif
     row[currow][curcol] = oss.str();
 
     curcol++;

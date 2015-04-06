@@ -137,12 +137,9 @@ OPTION(ms_tcp_rcvbuf, OPT_INT, 0)
 OPTION(ms_tcp_prefetch_max_size, OPT_INT, 4096) // max prefetch size, we limit this to avoid extra memcpy
 OPTION(ms_initial_backoff, OPT_DOUBLE, .2)
 OPTION(ms_max_backoff, OPT_DOUBLE, 15.0)
-#ifdef _WIN32
 OPTION(ms_nocrc, OPT_BOOL, false)
-#else
 OPTION(ms_crc_data, OPT_BOOL, true)
 OPTION(ms_crc_header, OPT_BOOL, true)
-#endif
 OPTION(ms_die_on_bad_msg, OPT_BOOL, false)
 OPTION(ms_die_on_unhandled_msg, OPT_BOOL, false)
 OPTION(ms_die_on_old_message, OPT_BOOL, false)     // assert if we get a dup incoming message and shouldn't have (may be triggered by pre-541cd3c64be0dfa04e8a2df39422e0eb9541a428 code)
@@ -501,7 +498,7 @@ OPTION(osd_pool_default_min_size, OPT_INT, 0)  // 0 means no specific default; c
 OPTION(osd_pool_default_pg_num, OPT_INT, 8) // number of PGs for new pools. Configure in global or mon section of ceph.conf
 OPTION(osd_pool_default_pgp_num, OPT_INT, 8) // number of PGs for placement purposes. Should be equal to pg_num
 
-//OPTION(osd_pool_default_erasure_code_directory, OPT_STR, CEPH_PKGLIBDIR"/erasure-code") // default for the erasure-code-directory=XXX property of osd pool create
+OPTION(osd_pool_default_erasure_code_directory, OPT_STR, "/erasure-code") // default for the erasure-code-directory=XXX property of osd pool create
 
 OPTION(osd_pool_default_erasure_code_profile,
        OPT_STR,
