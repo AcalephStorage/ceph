@@ -76,7 +76,13 @@ ssize_t safe_pread(int fd, void *buf, size_t count, off_t offset)
 	char *b = (char*)buf;
 
 	while (cnt < count) {
+#ifdef _WIN32
+		lseek(fd, offset + cnt, SEEK_SET);
+		//ssize_t r = pread(fd, b + cnt, count - cnt, offset + cnt);
+		ssize_t r = read(fd, b + cnt, count - cnt);
+#else
 		ssize_t r = pread(fd, b + cnt, count - cnt, offset + cnt);
+#endif
 		if (r <= 0) {
 			if (r == 0) {
 				// EOF
@@ -105,7 +111,12 @@ ssize_t safe_pread_exact(int fd, void *buf, size_t count, off_t offset)
 ssize_t safe_pwrite(int fd, const void *buf, size_t count, off_t offset)
 {
 	while (count > 0) {
+#ifdef _WIN32
+		lseek(fd, offset, SEEK_SET);
+		ssize_t r = write(fd, buf, count);
+#else
 		ssize_t r = pwrite(fd, buf, count, offset);
+#endif
 		if (r < 0) {
 			if (errno == EINTR)
 				continue;
@@ -150,11 +161,13 @@ ssize_t safe_splice_exact(int fd_in, loff_t *off_in, int fd_out,
     return -EDOM;
   return 0;
 }
-#endif
 
+
+#endif
 int safe_write_file(const char *base, const char *file,
 		    const char *val, size_t vallen)
 {
+#ifndef _WIN32
   int ret;
   char fn[PATH_MAX];
   char tmp[PATH_MAX];
@@ -203,11 +216,13 @@ int safe_write_file(const char *base, const char *file,
   VOID_TEMP_FAILURE_RETRY(close(fd));
 
   return ret;
+#endif
 }
 
 int safe_read_file(const char *base, const char *file,
 		   char *val, size_t vallen)
 {
+#ifndef _WIN32
   char fn[PATH_MAX];
   int fd, len;
 
@@ -225,4 +240,5 @@ int safe_read_file(const char *base, const char *file,
   VOID_TEMP_FAILURE_RETRY(close(fd));
 
   return len;
+#endif
 }
