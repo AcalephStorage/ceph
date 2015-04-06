@@ -1,6 +1,7 @@
 # generic entries
-# Makefile
-
+Makefile
+acconfig.h
+ceph_ver.h
 # local directory specific entries
 /.git_version
 /.libs
