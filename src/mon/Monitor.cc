@@ -18,6 +18,9 @@
 #include <signal.h>
 #include <limits.h>
 #include <cstring>
+#ifdef _WIN32
+#include <windows.h>
+#endif
 
 #include "Monitor.h"
 #include "common/version.h"
@@ -337,7 +340,7 @@ abort:
 void Monitor::handle_signal(int signum)
 {
   assert(signum == SIGINT || signum == SIGTERM);
-  derr << "*** Got Signal " << sys_siglist[signum] << " ***" << dendl;
+  ///derr << "*** Got Signal " << sys_siglist[signum] << " ***" << dendl;
   shutdown();
 }
 
@@ -2653,7 +2656,7 @@ void Monitor::handle_command(MMonCommand *m)
     rs = ds.str();
     r = 0;
   } else if (prefix == "heap") {
-    if (!ceph_using_tcmalloc())
+/*    if (!ceph_using_tcmalloc())
       rs = "tcmalloc not enabled, can't use heap profiler commands\n";
     else {
       string heapcmd;
@@ -2665,7 +2668,7 @@ void Monitor::handle_command(MMonCommand *m)
       rdata.append(ds);
       rs = "";
       r = 0;
-    }
+    }*/
   } else if (prefix == "quorum") {
     string quorumcmd;
     cmd_getval(g_ceph_context, cmdmap, "quorumcmd", quorumcmd);
@@ -4318,7 +4321,11 @@ int Monitor::write_default_keyring(bufferlist& bl)
 
   err = bl.write_fd(fd);
   if (!err)
+#ifdef _WIN32
+    FlushFileBuffers(&fd);
+#else
     ::fsync(fd);
+#endif
   ::close(fd);
 
   return err;

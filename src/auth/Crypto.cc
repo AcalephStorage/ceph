@@ -13,8 +13,6 @@
 
 #include <sstream>
 #include "Crypto.h"
-
-#ifndef _WIN32
 #ifdef USE_CRYPTOPP
 # include <cryptopp/modes.h>
 # include <cryptopp/aes.h>
@@ -24,8 +22,6 @@
 # include <nss.h>
 # include <pk11pub.h>
 #endif
-#endif // #ifndef _WIN32
-
 #include "include/assert.h"
 #include "common/Clock.h"
 #include "common/armor.h"
@@ -89,8 +85,6 @@ void CryptoNone::decrypt(const bufferptr& secret, const bufferlist& in,
   out = in;
 }
 
-
-#ifndef _WIN32
 // ---------------------------------------------------
 #ifdef USE_CRYPTOPP
 # define AES_KEY_LEN     ((size_t)CryptoPP::AES::DEFAULT_KEYLENGTH)
@@ -219,35 +213,27 @@ static void nss_aes_operation(CK_ATTRIBUTE_TYPE op, const bufferptr& secret,
 #else
 # error "No supported crypto implementation found."
 #endif
-#endif // #ifndef _WIN32
-
 int CryptoAES::create(bufferptr& secret)
 {
-#ifndef _WIN32
   bufferlist bl;
   int r = get_random_bytes(AES_KEY_LEN, bl);
   if (r < 0)
     return r;
   secret = buffer::ptr(bl.c_str(), bl.length());
-#endif // #ifndef _WIN32
   return 0;
 }
 
 int CryptoAES::validate_secret(bufferptr& secret)
 {
-#ifndef _WIN32
   if (secret.length() < (size_t)AES_KEY_LEN) {
     return -EINVAL;
   }
-
-#endif // #ifndef _WIN32
   return 0;
 }
 
 void CryptoAES::encrypt(const bufferptr& secret, const bufferlist& in, bufferlist& out,
 			std::string &error) const
 {
-#ifndef _WIN32
   if (secret.length() < AES_KEY_LEN) {
     error = "key is too short";
     return;
@@ -282,13 +268,11 @@ void CryptoAES::encrypt(const bufferptr& secret, const bufferlist& in, bufferlis
 #else
 # error "No supported crypto implementation found."
 #endif
-#endif // #ifndef _WIN32
 }
 
 void CryptoAES::decrypt(const bufferptr& secret, const bufferlist& in, 
 			bufferlist& out, std::string &error) const
 {
-#ifndef _WIN32
 #ifdef USE_CRYPTOPP
   const unsigned char *key = (const unsigned char *)secret.c_str();
 
@@ -319,7 +303,6 @@ void CryptoAES::decrypt(const bufferptr& secret, const bufferlist& in,
 #else
 # error "No supported crypto implementation found."
 #endif
-#endif // #ifndef _WIN32
 }
 
 

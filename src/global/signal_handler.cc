@@ -18,14 +18,17 @@
 #include "common/debug.h"
 #include "global/pidfile.h"
 #include "global/signal_handler.h"
-
+#ifdef _WIN32
+#include <winsock2.h>
+#else
 #include <poll.h>
+#endif
 #include <signal.h>
 #include <sstream>
 #include <stdlib.h>
 #include <sys/stat.h>
 #include <sys/types.h>
-
+/*
 void install_sighandler(int signum, signal_handler_t handler, int flags)
 {
   int ret;
@@ -47,7 +50,7 @@ void install_sighandler(int signum, signal_handler_t handler, int flags)
     exit(1);
   }
 }
-
+*/
 void sighup_handler(int signum)
 {
   g_ceph_context->reopen_logs();
@@ -72,7 +75,7 @@ static void reraise_fatal(int signum)
   }
   exit(1);
 }
-
+/*
 static void handle_fatal_signal(int signum)
 {
   // This code may itself trigger a SIGSEGV if the heap is corrupt. In that
@@ -107,8 +110,8 @@ static void handle_fatal_signal(int signum)
   }
 
   reraise_fatal(signum);
-}
-
+}*/
+/*
 void install_standard_sighandlers(void)
 {
   install_sighandler(SIGSEGV, handle_fatal_signal, SA_RESETHAND | SA_NODEFER);
@@ -120,7 +123,7 @@ void install_standard_sighandlers(void)
   install_sighandler(SIGXFSZ, handle_fatal_signal, SA_RESETHAND | SA_NODEFER);
   install_sighandler(SIGSYS, handle_fatal_signal, SA_RESETHAND | SA_NODEFER);
 }
-
+*/
 
 
 /// --- safe handler ---
@@ -163,17 +166,26 @@ struct SignalHandler : public Thread {
   SignalHandler()
     : stop(false), lock("SignalHandler::lock")
   {
-    for (unsigned i = 0; i < 32; i++)
+  /*  for (unsigned i = 0; i < 32; i++)
       handlers[i] = NULL;
 
     // create signal pipe
+    #ifdef _WIN32
+    int r = CreatePipe(pipefd)
+    #else
     int r = pipe(pipefd);
+    #endif
     assert(r == 0);
+    #ifdef _WIN32
+    unsigned long ul;
+    r = ioctlsocket(pipefd, FIONBIO, &ul);
+    #else
     r = fcntl(pipefd[0], F_SETFL, O_NONBLOCK);
+    #endif
     assert(r == 0);
 
     // create thread
-    create();
+    create();*/
   }
 
   ~SignalHandler() {
@@ -193,7 +205,7 @@ struct SignalHandler : public Thread {
 
   // thread entry point
   void *entry() {
-    while (!stop) {
+ /*   while (!stop) {
       // build fd list
       struct pollfd fds[33];
 
@@ -236,7 +248,7 @@ struct SignalHandler : public Thread {
       } else {
 	//cout << "no data, got r=" << r << " errno=" << errno << std::endl;
       }
-    }
+    }*/
     return NULL;
   }
 
@@ -263,6 +275,7 @@ static void handler_hook(int signum)
 
 void SignalHandler::register_handler(int signum, signal_handler_t handler, bool oneshot)
 {
+ /* 
   int r;
 
   assert(signum >= 0 && signum < 32);
@@ -271,7 +284,12 @@ void SignalHandler::register_handler(int signum, signal_handler_t handler, bool 
 
   r = pipe(h->pipefd);
   assert(r == 0);
+  #ifdef _WIN32
+  unsigned long ul;
+  r = ioctlsocket(h->pipefd[0], FIONBIO, &ul);
+  #else
   r = fcntl(h->pipefd[0], F_SETFL, O_NONBLOCK);
+  #endif
   assert(r == 0);
 
   h->handler = handler;
@@ -292,11 +310,12 @@ void SignalHandler::register_handler(int signum, signal_handler_t handler, bool 
   act.sa_flags = oneshot ? SA_RESETHAND : 0;
 
   int ret = sigaction(signum, &act, &oldact);
-  assert(ret == 0);
+  assert(ret == 0);*/
 }
 
 void SignalHandler::unregister_handler(int signum, signal_handler_t handler)
 {
+  /*
   assert(signum >= 0 && signum < 32);
   safe_handler *h = handlers[signum];
   assert(h);
@@ -313,7 +332,7 @@ void SignalHandler::unregister_handler(int signum, signal_handler_t handler)
   // this will wake up select() so that worker thread sees our handler is gone
   close(h->pipefd[0]);
   close(h->pipefd[1]);
-  delete h;
+  delete h;*/
 }
 
 

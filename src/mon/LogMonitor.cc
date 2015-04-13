@@ -13,8 +13,10 @@
  */
 
 #include <sstream>
+#ifdef _WIN32
+#else
 #include <syslog.h>
-
+#endif
 #include "LogMonitor.h"
 #include "Monitor.h"
 #include "MonitorDBStore.h"

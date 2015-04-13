@@ -34,7 +34,10 @@
 static ostream& _prefix(std::ostream *_dout, const string& dir) {
   return *_dout << "store(" << dir << ") ";
 }
-
+#ifdef _WIN32
+#define F_WRLCK 3
+#include <windows.h>
+#endif
 #include <stdio.h>
 #include <sys/types.h>
 #include <sys/stat.h>
@@ -62,6 +65,7 @@ int MonitorStore::mount()
   lock_fd = ::open(t, O_CREAT|O_RDWR, 0600);
   if (lock_fd < 0)
     return -errno;
+#ifndef _WIN32
   struct flock l;
   memset(&l, 0, sizeof(l));
   l.l_type = F_WRLCK;
@@ -73,7 +77,7 @@ int MonitorStore::mount()
     dout(0) << "failed to lock " << t << ", is another ceph-mon still running?" << dendl;
     return -errno;
   }
-
+#endif
   if ((!g_conf->chdir.empty()) && (dir[0] != '/')) {
     // combine it with the cwd, in case fuse screws things up (i.e. fakefuse)
     string old = dir;
@@ -96,8 +100,11 @@ int MonitorStore::umount()
 int MonitorStore::mkfs()
 {
   int err;
-
+#ifdef _WIN32
+  err = ::_mkdir(dir.c_str());
+#else
   err = ::mkdir(dir.c_str(), 0700);
+#endif
   if (err < 0 && errno != EEXIST) {
     err = -errno;
     derr << "MonitorStore::mkfs: unable to create " << dir << ": " << cpp_strerror(err) << dendl;
@@ -169,7 +176,11 @@ void MonitorStore::put_int(version_t val, const char *a, const char *b)
   char fn[1024];
   snprintf(fn, sizeof(fn), "%s/%s", dir.c_str(), a);
   if (b) {
+#ifdef _WIN32
+    int r = ::_mkdir(fn);
+#else
     int r = ::mkdir(fn, 0755);
+#endif
     if ((r < 0) && (errno != EEXIST)) {
       int err = -errno;
       derr << __func__ << " failed to create dir " << fn << ": "
@@ -201,7 +212,11 @@ void MonitorStore::put_int(version_t val, const char *a, const char *b)
 	 << cpp_strerror(r) << dendl;
     ceph_abort();
   }
+#ifdef _WIN32
+  r = FlushFileBuffers(&fd);
+#else
   r = ::fsync(fd);
+#endif
   if (r) {
     derr << "Monitor::put_int: failed to fsync fd for '" << tfn << "': "
 	 << cpp_strerror(r) << dendl;
@@ -294,8 +309,11 @@ int MonitorStore::get_bl_ss(bufferlist& bl, const char *a, const char *b)
   struct stat st;
   int rc = ::fstat(fd, &st);
   assert(rc == 0);
+#ifdef _WIN32
+  int32_t len = st.st_size;
+#else
   __int32_t len = st.st_size;
- 
+#endif
   // read buffer
   bl.clear();
   bufferptr bp(len);
@@ -327,7 +345,11 @@ void MonitorStore::write_bl_ss(bufferlist& bl, const char *a, const char *b, boo
   char fn[1024];
   snprintf(fn, sizeof(fn), "%s/%s", dir.c_str(), a);
   if (b) {
+#ifdef _WIN32
+    int r = ::_mkdir(fn);
+#else
     int r = ::mkdir(fn, 0755);
+#endif
     if ((r < 0) && (errno != EEXIST)) {
       err = -errno;
       derr << __func__ << " failed to create dir " << fn
@@ -362,7 +384,11 @@ void MonitorStore::write_bl_ss(bufferlist& bl, const char *a, const char *b, boo
   
   err = bl.write_fd(fd);
   assert(!err);
+#ifdef _WIN32
+  err = FlushFileBuffers(&fd);
+#else
   err = ::fsync(fd);
+#endif
   assert(!err);
   err = TEMP_FAILURE_RETRY(::close(fd));
   assert (!err); // this really can't fail, right? right?...
@@ -402,7 +428,11 @@ void MonitorStore::put_bl_sn_map(const char *a,
   // make sure dir exists
   char dfn[1024];
   snprintf(dfn, sizeof(dfn), "%s/%s", dir.c_str(), a);
+#ifdef _WIN32
+  int r = ::_mkdir(dfn);
+#else
   int r = ::mkdir(dfn, 0755);
+#endif
   if ((r < 0) && (errno != EEXIST)) {
     err = -errno;
     derr << __func__ << " failed to create dir " << dfn << ": "
@@ -467,7 +497,11 @@ void MonitorStore::put_bl_sn_map(const char *a,
 	 << ": " << cpp_strerror(err) << dendl;
     assert(0 == "failed to open dir");
   }
+#ifdef _WIN32
+  err = FlushFileBuffers(&dirfd);
+#else
   err = ::fsync(dirfd);
+#endif
   if (err < 0) {
     err = -errno;
     derr << __func__ << " failed to fsync " << dir

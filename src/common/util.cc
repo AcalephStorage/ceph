@@ -14,10 +14,11 @@
 
 #include <errno.h>
 
-#include "include/util.h"
-#include "common/errno.h"
-#include "common/strtol.h"
+#include  "../include/util.h"
+#include "../common/errno.h"
+#include "../common/strtol.h"
 #ifdef _WIN32
+#include "../common/ceph-mingw-type.h"
 #else
 #ifdef HAVE_SYS_VFS_H
 #include <sys/vfs.h>
@@ -112,11 +113,14 @@ int64_t unit_to_bytesize(string val, ostream *pss)
 
 int get_fs_stats(ceph_data_stats_t &stats, const char *path)
 {
+#ifdef _WIN32
+#else
   if (!path)
     return -EINVAL;
 
-  struct statfs stbuf;
+  struct statvfs stbuf;
   int err = ::statfs(path, &stbuf);
+#endif
   if (err < 0) {
     return -errno;
   }
@@ -125,5 +129,6 @@ int get_fs_stats(ceph_data_stats_t &stats, const char *path)
   stats.byte_used = (stbuf.f_blocks - stbuf.f_bfree) * stbuf.f_bsize;
   stats.byte_avail = stbuf.f_bavail * stbuf.f_bsize;
   stats.avail_percent = (((float)stats.byte_avail/stats.byte_total)*100);
+#endif
   return 0;
 }
