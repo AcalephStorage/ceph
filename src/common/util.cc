@@ -18,7 +18,6 @@
 #include "../common/errno.h"
 #include "../common/strtol.h"
 #ifdef _WIN32
-#include "../common/ceph-mingw-type.h"
 #else
 #ifdef HAVE_SYS_VFS_H
 #include <sys/vfs.h>
@@ -118,9 +117,8 @@ int get_fs_stats(ceph_data_stats_t &stats, const char *path)
   if (!path)
     return -EINVAL;
 
-  struct statvfs stbuf;
+  struct statfs stbuf;
   int err = ::statfs(path, &stbuf);
-#endif
   if (err < 0) {
     return -errno;
   }
