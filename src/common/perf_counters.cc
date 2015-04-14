@@ -131,16 +131,19 @@ void PerfCountersCollection::dump_formatted(
       (*l)->dump_formatted(f, schema);
       if (++l == l_end)
 	break;
+    }
+  }
+  f->close_section();
 #else
   for (perf_counters_set_t::iterator l = m_loggers.begin();
        l != m_loggers.end(); ++l) {
     // Optionally filter on logger name, pass through counter filter
     if (logger.empty() || (*l)->get_name() == logger) {
       (*l)->dump_formatted(f, schema, counter);
-#endif
     }
   }
   f->close_section();
+#endif
 }
 
 // ---------------------------
