@@ -79,10 +79,10 @@ string lowercase_underscore_http_attr(const string& orig)
   for (size_t i = 0; i < orig.size(); ++i, ++s) {
     switch (*s) {
       case '-':
-	buf[i] = '_';
-	break;
+        buf[i] = '_';
+        break;
       default:
-	buf[i] = tolower(*s);
+        buf[i] = tolower(*s);
     }
   }
   return string(buf);
@@ -101,10 +101,32 @@ string uppercase_underscore_http_attr(const string& orig)
   for (size_t i = 0; i < orig.size(); ++i, ++s) {
     switch (*s) {
       case '-':
-	buf[i] = '_';
-	break;
+        buf[i] = '_';
+        break;
       default:
-	buf[i] = toupper(*s);
+        buf[i] = toupper(*s);
+    }
+  }
+  return string(buf);
+}
+
+/*
+ * make attrs look-like-this
+ * converts underscores to dashes
+ */
+string lowercase_dash_http_attr(const string& orig)
+{
+  const char *s = orig.c_str();
+  char buf[orig.size() + 1];
+  buf[orig.size()] = '\0';
+
+  for (size_t i = 0; i < orig.size(); ++i, ++s) {
+    switch (*s) {
+      case '_':
+        buf[i] = '-';
+        break;
+      default:
+        buf[i] = tolower(*s);
     }
   }
   return string(buf);
@@ -125,21 +147,23 @@ string camelcase_dash_http_attr(const string& orig)
   for (size_t i = 0; i < orig.size(); ++i, ++s) {
     switch (*s) {
       case '_':
-	buf[i] = '-';
-	last_sep = true;
-	break;
+        buf[i] = '-';
+        last_sep = true;
+        break;
       default:
-	if (last_sep)
-	  buf[i] = toupper(*s);
-	else
-	  buf[i] = tolower(*s);
-	last_sep = false;
+        if (last_sep)
+          buf[i] = toupper(*s);
+        else
+          buf[i] = tolower(*s);
+        last_sep = false;
     }
   }
   return string(buf);
 }
 
-void rgw_rest_init(CephContext *cct)
+static list<string> hostnames_list;
+
+void rgw_rest_init(CephContext *cct, RGWRegion& region)
 {
   for (struct rgw_http_attr *attr = rgw_to_http_attr_list; attr->rgw_attr; attr++) {
     rgw_to_http_attrs[attr->rgw_attr] = attr->http_attr;
@@ -168,6 +192,58 @@ void rgw_rest_init(CephContext *cct)
   for (const struct rgw_http_status_code *h = http_codes; h->code; h++) {
     http_status_names[h->code] = h->name;
   }
+
+  /* avoid duplicate hostnames in hostnames list */
+  map<string, bool> hostnames_map;
+  if (!cct->_conf->rgw_dns_name.empty()) {
+    hostnames_map[cct->_conf->rgw_dns_name] = true;
+  }
+  for (list<string>::iterator iter = region.hostnames.begin(); iter != region.hostnames.end(); ++iter) {
+    hostnames_map[*iter] = true;
+  }
+
+  for (map<string, bool>::iterator iter = hostnames_map.begin(); iter != hostnames_map.end(); ++iter) {
+    hostnames_list.push_back(iter->first);
+  }
+}
+
+static bool str_ends_with(const string& s, const string& suffix, size_t *pos)
+{
+  size_t len = suffix.size();
+  if (len > (size_t)s.size()) {
+    return false;
+  }
+
+  ssize_t p = s.size() - len;
+  if (pos) {
+    *pos = p;
+  }
+
+  return s.compare(p, len, suffix) == 0;
+}
+
+static bool rgw_find_host_in_domains(const string& host, string *domain, string *subdomain)
+{
+  list<string>::iterator iter;
+  for (iter = hostnames_list.begin(); iter != hostnames_list.end(); ++iter) {
+    size_t pos;
+    if (!str_ends_with(host, *iter, &pos))
+      continue;
+
+    *domain = host.substr(pos);
+    if (pos == 0) {
+      subdomain->clear();
+    } else {
+      if (host[pos - 1] != '.') {
+        continue;
+      }
+
+      *domain = host.substr(pos);
+      *subdomain = host.substr(0, pos - 1);
+    }
+    return true;
+  }
+  return false;
 }
 
 static void dump_status(struct req_state *s, const char *status, const char *status_name)
@@ -241,6 +317,14 @@ void dump_errno(struct req_state *s, int err)
   dump_status(s, buf, http_status_names[s->err.http_ret]);
 }
 
+void dump_string_header(struct req_state *s, const char *name, const char *val)
+{
+  int r = s->cio->print("%s: %s\r\n", name, val);
+  if (r < 0) {
+    ldout(s->cct, 0) << "ERROR: s->cio->print() returned err=" << r << dendl;
+  }
+}
+
 void dump_content_length(struct req_state *s, uint64_t len)
 {
   int r = s->cio->send_content_length(len);
@@ -291,8 +375,8 @@ void dump_uri_from_state(struct req_state *s)
     if (!s->bucket_name_str.empty()) {
       location += s->bucket_name_str;
       location += "/";
-      if (!s->object_str.empty()) {
-        location += s->object_str;
+      if (!s->object.empty()) {
+        location += s->object.name;
         s->cio->print("Location: %s\r\n", location.c_str());
       }
     }
@@ -1002,6 +1086,21 @@ int RGWHandler_ObjStore::allocate_formatter(struct req_state *s, int default_typ
       s->format = RGW_FORMAT_XML;
     } else if (format_str.compare("json") == 0) {
       s->format = RGW_FORMAT_JSON;
+    } else {
+      const char *accept = s->info.env->get("HTTP_ACCEPT");
+      if (accept) {
+        char format_buf[64];
+        unsigned int i = 0;
+        for (; i < sizeof(format_buf) - 1 && accept[i] && accept[i] != ';'; ++i) {
+          format_buf[i] = accept[i];
+        }
+        format_buf[i] = 0;
+        if ((strcmp(format_buf, "text/xml") == 0) || (strcmp(format_buf, "application/xml") == 0)) {
+          s->format = RGW_FORMAT_XML;
+        } else if (strcmp(format_buf, "application/json") == 0) {
+          s->format = RGW_FORMAT_JSON;
+        }
+      }
     }
   }
 
@@ -1108,7 +1207,7 @@ int RGWHandler_ObjStore::read_permissions(RGWOp *op_obj)
       break;
     }
     /* is it a 'create bucket' request? */
-    if ((s->op == OP_PUT) && s->object_str.size() == 0)
+    if (op_obj->get_type() == RGW_OP_CREATE_BUCKET)
       return 0;
     only_bucket = true;
     break;
@@ -1203,34 +1302,45 @@ int RGWREST::preprocess(struct req_state *s, RGWClientIO *cio)
   req_info& info = s->info;
 
   s->cio = cio;
-  if (g_conf->rgw_dns_name.length() && info.host) {
+  if (info.host) {
     string h(s->info.host);
 
-    ldout(s->cct, 10) << "host=" << s->info.host << " rgw_dns_name=" << g_conf->rgw_dns_name << dendl;
-    int pos = h.find(g_conf->rgw_dns_name);
+    ldout(s->cct, 10) << "host=" << s->info.host << dendl;
+    string domain;
+    string subdomain;
+    bool in_hosted_domain = rgw_find_host_in_domains(h, &domain, &subdomain);
+    ldout(s->cct, 20) << "subdomain=" << subdomain << " domain=" << domain << " in_hosted_domain=" << in_hosted_domain << dendl;
 
-    if (g_conf->rgw_resolve_cname && pos < 0) {
+    if (g_conf->rgw_resolve_cname && !in_hosted_domain) {
       string cname;
       bool found;
       int r = rgw_resolver->resolve_cname(h, cname, &found);
       if (r < 0) {
-	dout(0) << "WARNING: rgw_resolver->resolve_cname() returned r=" << r << dendl;
+	ldout(s->cct, 0) << "WARNING: rgw_resolver->resolve_cname() returned r=" << r << dendl;
       }
       if (found) {
-        dout(0) << "resolved host cname " << h << " -> " << cname << dendl;
-	h = cname;
-        pos = h.find(g_conf->rgw_dns_name);
+        ldout(s->cct, 5) << "resolved host cname " << h << " -> " << cname << dendl;
+        in_hosted_domain = rgw_find_host_in_domains(cname, &domain, &subdomain);
+        ldout(s->cct, 20) << "subdomain=" << subdomain << " domain=" << domain << " in_hosted_domain=" << in_hosted_domain << dendl;
       }
     }
 
-    if (pos > 0 && h[pos - 1] == '.') {
+    if (in_hosted_domain && !subdomain.empty()) {
       string encoded_bucket = "/";
-      encoded_bucket.append(h.substr(0, pos-1));
+      encoded_bucket.append(subdomain);
       if (s->info.request_uri[0] != '/')
-	encoded_bucket.append("/'");
+        encoded_bucket.append("/'");
       encoded_bucket.append(s->info.request_uri);
       s->info.request_uri = encoded_bucket;
     }
+
+    if (!domain.empty()) {
+      s->info.domain = domain;
+    }
+  }
+
+  if (s->info.domain.empty()) {
+    s->info.domain = s->cct->_conf->rgw_dns_name;
   }
 
   url_decode(s->info.request_uri, s->decoded_uri);

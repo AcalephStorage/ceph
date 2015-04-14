@@ -37,6 +37,7 @@
 #include <sstream>
 #include <vector>
 
+#include "common/bit_vector.hpp"
 #include "common/errno.h"
 #include "objclass/objclass.h"
 #include "include/rbd_types.h"
@@ -71,6 +72,8 @@ cls_method_handle_t h_get_protection_status;
 cls_method_handle_t h_set_protection_status;
 cls_method_handle_t h_get_stripe_unit_count;
 cls_method_handle_t h_set_stripe_unit_count;
+cls_method_handle_t h_get_flags;
+cls_method_handle_t h_set_flags;
 cls_method_handle_t h_remove_parent;
 cls_method_handle_t h_add_child;
 cls_method_handle_t h_remove_child;
@@ -90,6 +93,9 @@ cls_method_handle_t h_dir_list;
 cls_method_handle_t h_dir_add_image;
 cls_method_handle_t h_dir_remove_image;
 cls_method_handle_t h_dir_rename_image;
+cls_method_handle_t h_object_map_load;
+cls_method_handle_t h_object_map_resize;
+cls_method_handle_t h_object_map_update;
 cls_method_handle_t h_old_snapshots_list;
 cls_method_handle_t h_old_snapshot_add;
 cls_method_handle_t h_old_snapshot_remove;
@@ -711,6 +717,127 @@ int set_stripe_unit_count(cls_method_context_t hctx, bufferlist *in, bufferlist 
   return 0;
 }
 
+/**
+ * get the image flags
+ *
+ * Input:
+ * @param snap_id which snapshot to query, to CEPH_NOSNAP (uint64_t)
+ *
+ * Output:
+ * @param flags image flags
+ *
+ * @returns 0 on success, negative error code upon failure
+ */
+int get_flags(cls_method_context_t hctx, bufferlist *in, bufferlist *out)
+{
+  uint64_t snap_id;
+  bufferlist::iterator iter = in->begin();
+  try {
+    ::decode(snap_id, iter);
+  } catch (const buffer::error &err) {
+    return -EINVAL;
+  }
+
+  CLS_LOG(20, "get_flags snap_id=%llu", (unsigned long long)snap_id);
+
+  uint64_t flags = 0;
+  if (snap_id == CEPH_NOSNAP) {
+    int r = read_key(hctx, "flags", &flags);
+    if (r < 0 && r != -ENOENT) {
+      CLS_ERR("failed to read flags off disk: %s", cpp_strerror(r).c_str());
+      return r;
+    }
+  } else {
+    cls_rbd_snap snap;
+    string snapshot_key;
+    key_from_snap_id(snap_id, &snapshot_key);
+    int r = read_key(hctx, snapshot_key, &snap);
+    if (r < 0) {
+      return r;
+    }
+    flags = snap.flags;
+  }
+
+  ::encode(flags, *out);
+  return 0;
+}
+
+/**
+ * set the image flags
+ *
+ * Input:
+ * @params flags image flags
+ * @params mask image flag mask
+ * @params snap_id which snapshot to update, or CEPH_NOSNAP (uint64_t)
+ *
+ * Output:
+ * none
+ *
+ * @returns 0 on success, negative error code upon failure
+ */
+int set_flags(cls_method_context_t hctx, bufferlist *in, bufferlist *out)
+{
+  uint64_t flags;
+  uint64_t mask;
+  uint64_t snap_id = CEPH_NOSNAP;
+  bufferlist::iterator iter = in->begin();
+  try {
+    ::decode(flags, iter);
+    ::decode(mask, iter);
+    if (!iter.end()) {
+      ::decode(snap_id, iter);
+    }
+  } catch (const buffer::error &err) {
+    return -EINVAL;
+  }
+
+  // check that size exists to make sure this is a header object
+  // that was created correctly
+  int r;
+  uint64_t orig_flags = 0;
+  cls_rbd_snap snap_meta;
+  string snap_meta_key;
+  if (snap_id == CEPH_NOSNAP) {
+    r = read_key(hctx, "flags", &orig_flags);
+    if (r < 0 && r != -ENOENT) {
+      CLS_ERR("Could not read image's flags off disk: %s",
+              cpp_strerror(r).c_str());
+      return r;
+    }
+  } else {
+    key_from_snap_id(snap_id, &snap_meta_key);
+    r = read_key(hctx, snap_meta_key, &snap_meta);
+    if (r < 0) {
+      CLS_ERR("Could not read snapshot: snap_id=%" PRIu64 ": %s",
+              snap_id, cpp_strerror(r).c_str());
+      return r;
+    }
+    orig_flags = snap_meta.flags;
+  }
+
+  flags = (orig_flags & ~mask) | (flags & mask);
+  CLS_LOG(20, "set_flags snap_id=%" PRIu64 ", orig_flags=%" PRIu64 ", "
+              "new_flags=%" PRIu64 ", mask=%" PRIu64, snap_id, orig_flags,
+              flags, mask);
+
+  if (snap_id == CEPH_NOSNAP) {
+    bufferlist bl;
+    ::encode(flags, bl);
+    r = cls_cxx_map_set_val(hctx, "flags", &bl);
+  } else {
+    snap_meta.flags = flags;
+
+    bufferlist bl;
+    ::encode(snap_meta, bl);
+    r = cls_cxx_map_set_val(hctx, snap_meta_key, &bl);
+  }
+
+  if (r < 0) {
+    CLS_ERR("error updating flags: %s", cpp_strerror(r).c_str());
+    return r;
+  }
+  return 0;
+}
 
 /**
  * get the current parent, if any
@@ -1245,6 +1372,11 @@ int snapshot_add(cls_method_context_t hctx, bufferlist *in, bufferlist *out)
   r = read_key(hctx, "features", &snap_meta.features);
   if (r < 0) {
     CLS_ERR("Could not read image's features off disk: %s", cpp_strerror(r).c_str());
+    return r;
+  }
+  r = read_key(hctx, "flags", &snap_meta.flags);
+  if (r < 0 && r != -ENOENT) {
+    CLS_ERR("Could not read image's flags off disk: %s", cpp_strerror(r).c_str());
     return r;
   }
 
@@ -1795,6 +1927,217 @@ int dir_remove_image(cls_method_context_t hctx, bufferlist *in, bufferlist *out)
   return dir_remove_image_helper(hctx, name, id);
 }
 
+int object_map_read(cls_method_context_t hctx, BitVector<2> &object_map)
+{
+  uint64_t size;
+  int r = cls_cxx_stat(hctx, &size, NULL);
+  if (r < 0) {
+    return r;
+  }
+
+  bufferlist bl;
+  r = cls_cxx_read(hctx, 0, size, &bl);
+  if (r < 0) {
+   return r;
+  }
+
+  try {
+    bufferlist::iterator iter = bl.begin();
+    ::decode(object_map, iter);
+  } catch (const buffer::error &err) {
+    CLS_ERR("failed to decode object map: %s", err.what());
+    return -EINVAL;
+  }
+  return 0;
+}
+
+/**
+ * Load an rbd image's object map
+ *
+ * Input:
+ * none
+ *
+ * Output:
+ * @param object map bit vector
+ * @returns 0 on success, negative error code on failure
+ */
+int object_map_load(cls_method_context_t hctx, bufferlist *in, bufferlist *out)
+{
+  BitVector<2> object_map;
+  int r = object_map_read(hctx, object_map);
+  if (r < 0) {
+    return r;
+  }
+
+  object_map.set_crc_enabled(false);
+  ::encode(object_map, *out);
+  return 0;
+}
+
+/**
+ * Resize an rbd image's object map
+ *
+ * Input:
+ * @param object_count the max number of objects in the image
+ * @param default_state the default state of newly created objects
+ *
+ * Output:
+ * @returns 0 on success, negative error code on failure
+ */
+int object_map_resize(cls_method_context_t hctx, bufferlist *in, bufferlist *out)
+{
+  uint64_t object_count;
+  uint8_t default_state;
+  try {
+    bufferlist::iterator iter = in->begin();
+    ::decode(object_count, iter);
+    ::decode(default_state, iter);
+  } catch (const buffer::error &err) {
+    return -EINVAL;
+  }
+
+  BitVector<2> object_map;
+  int r = object_map_read(hctx, object_map);
+  if ((r < 0) && (r != -ENOENT)) {
+    return r;
+  }
+
+  size_t orig_object_map_size = object_map.size();
+  if (object_count < orig_object_map_size) {
+    for (uint64_t i = object_count + 1; i < orig_object_map_size; ++i) {
+      if (object_map[i] != default_state) {
+	CLS_ERR("object map indicates object still exists: %" PRIu64, i);
+	return -ESTALE;
+      }
+    }
+    object_map.resize(object_count);
+  } else if (object_count > orig_object_map_size) {
+    object_map.resize(object_count);
+    for (uint64_t i = orig_object_map_size; i < object_count; ++i) {
+      object_map[i] = default_state;
+    }
+  }
+
+  bufferlist map;
+  ::encode(object_map, map);
+  CLS_LOG(20, "object_map_resize: object size=%" PRIu64 ", byte size=%u",
+	  object_count, map.length());
+  return cls_cxx_write_full(hctx, &map);
+}
+
+/**
+ * Update an rbd image's object map
+ *
+ * Input:
+ * @param start_object_no the start object iterator
+ * @param end_object_no the end object iterator
+ * @param new_object_state the new object state
+ * @param current_object_state optional current object state filter
+ *
+ * Output:
+ * @returns 0 on success, negative error code on failure
+ */
+int object_map_update(cls_method_context_t hctx, bufferlist *in, bufferlist *out)
+{
+  uint64_t start_object_no;
+  uint64_t end_object_no;
+  uint8_t new_object_state;
+  boost::optional<uint8_t> current_object_state;
+  try {
+    bufferlist::iterator iter = in->begin();
+    ::decode(start_object_no, iter);
+    ::decode(end_object_no, iter);
+    ::decode(new_object_state, iter);
+    ::decode(current_object_state, iter);
+  } catch (const buffer::error &err) {
+    return -EINVAL;
+  }
+
+  uint64_t size;
+  int r = cls_cxx_stat(hctx, &size, NULL);
+  if (r < 0) {
+    return r;
+  }
+
+  BitVector<2> object_map;
+  bufferlist header_bl;
+  r = cls_cxx_read(hctx, 0, object_map.get_header_length(), &header_bl);
+  if (r < 0) {
+    return r;
+  }
+
+  try {
+    bufferlist::iterator it = header_bl.begin();
+    object_map.decode_header(it);
+  } catch (const buffer::error &err) {
+    CLS_ERR("failed to decode object map header: %s", err.what());
+    return -EINVAL;
+  }
+
+  bufferlist footer_bl;
+  r = cls_cxx_read(hctx, object_map.get_footer_offset(),
+		   size - object_map.get_footer_offset(), &footer_bl);
+  try {
+    bufferlist::iterator it = footer_bl.begin();
+    object_map.decode_footer(it);
+  } catch (const buffer::error &err) {
+    CLS_ERR("failed to decode object map footer: %s", err.what());
+  }
+
+  if (start_object_no >= end_object_no || end_object_no > object_map.size()) {
+    return -ERANGE;
+  }
+
+  uint64_t byte_offset;
+  uint64_t byte_length;
+  object_map.get_data_extents(start_object_no,
+			      end_object_no - start_object_no,
+			      &byte_offset, &byte_length);
+
+  bufferlist data_bl;
+  r = cls_cxx_read(hctx, object_map.get_header_length() + byte_offset,
+		   byte_length, &data_bl); 
+  if (r < 0) {
+    return r;
+  }
+
+  try {
+    bufferlist::iterator it = data_bl.begin();
+    object_map.decode_data(it, byte_offset);
+  } catch (const buffer::error &err) {
+    CLS_ERR("failed to decode data chunk [%" PRIu64 "]: %s",
+	    byte_offset, err.what());
+    return -EINVAL;
+  } 
+
+  bool updated = false;
+  for (uint64_t object_no = start_object_no; object_no < end_object_no;
+       ++object_no) {
+    if ((!current_object_state || object_map[object_no] == *current_object_state) &&
+	object_map[object_no] != new_object_state) {
+      object_map[object_no] = new_object_state;
+      updated = true;
+    }
+  }
+
+  if (updated) {
+    CLS_LOG(20, "object_map_update: %" PRIu64 "~%" PRIu64 " -> %" PRIu64,
+	    byte_offset, byte_length,
+	    object_map.get_header_length() + byte_offset);
+
+    bufferlist data_bl;
+    object_map.encode_data(data_bl, byte_offset, byte_length);
+    r = cls_cxx_write(hctx, object_map.get_header_length() + byte_offset,
+		      data_bl.length(), &data_bl);
+
+    footer_bl.clear();
+    object_map.encode_footer(footer_bl);
+    r = cls_cxx_write(hctx, object_map.get_footer_offset(), footer_bl.length(),
+		      &footer_bl);
+  }
+  return r;
+}
+
 /****************************** Old format *******************************/
 
 int old_snapshots_list(cls_method_context_t hctx, bufferlist *in, bufferlist *out)
@@ -2050,6 +2393,12 @@ void __cls_init()
   cls_register_cxx_method(h_class, "set_stripe_unit_count",
 			  CLS_METHOD_RD | CLS_METHOD_WR,
 			  set_stripe_unit_count, &h_set_stripe_unit_count);
+  cls_register_cxx_method(h_class, "get_flags",
+                          CLS_METHOD_RD,
+                          get_flags, &h_get_flags);
+  cls_register_cxx_method(h_class, "set_flags",
+                          CLS_METHOD_RD | CLS_METHOD_WR,
+                          set_flags, &h_set_flags);
 
   /* methods for the rbd_children object */
   cls_register_cxx_method(h_class, "add_child",
@@ -2089,6 +2438,17 @@ void __cls_init()
   cls_register_cxx_method(h_class, "dir_rename_image",
 			  CLS_METHOD_RD | CLS_METHOD_WR,
 			  dir_rename_image, &h_dir_rename_image);
+
+  /* methods for the rbd_object_map.$image_id object */
+  cls_register_cxx_method(h_class, "object_map_load",
+                          CLS_METHOD_RD,
+			  object_map_load, &h_object_map_load);
+  cls_register_cxx_method(h_class, "object_map_resize",
+                          CLS_METHOD_RD | CLS_METHOD_WR,
+			  object_map_resize, &h_object_map_resize);
+  cls_register_cxx_method(h_class, "object_map_update",
+                          CLS_METHOD_RD | CLS_METHOD_WR,
+			  object_map_update, &h_object_map_update);
 
   /* methods for the old format */
   cls_register_cxx_method(h_class, "snap_list",

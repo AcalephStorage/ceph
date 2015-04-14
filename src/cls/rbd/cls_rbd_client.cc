@@ -194,12 +194,18 @@ namespace librbd {
     }
 
     int set_size(librados::IoCtx *ioctx, const std::string &oid,
-		 uint64_t size)
+                 uint64_t size)
     {
-      bufferlist bl, bl2;
-      ::encode(size, bl);
+      librados::ObjectWriteOperation op;
+      set_size(&op, size);
+      return ioctx->operate(oid, &op);
+    }
 
-      return ioctx->exec(oid, "rbd", "set_size", bl, bl2);
+    void set_size(librados::ObjectWriteOperation *op, uint64_t size)
+    {
+      bufferlist bl;
+      ::encode(size, bl);
+      op->exec("rbd", "set_size", bl);
     }
 
     int get_parent(librados::IoCtx *ioctx, const std::string &oid,
@@ -238,10 +244,63 @@ namespace librbd {
       return ioctx->exec(oid, "rbd", "set_parent", inbl, outbl);
     }
 
+    int get_flags(librados::IoCtx *ioctx, const std::string &oid,
+		  uint64_t *flags, const std::vector<snapid_t> &snap_ids,
+		  vector<uint64_t> *snap_flags)
+    {
+      bufferlist inbl;
+      ::encode(static_cast<snapid_t>(CEPH_NOSNAP), inbl);
+
+      librados::ObjectReadOperation op;
+      op.exec("rbd", "get_flags", inbl);
+      for (size_t i = 0; i < snap_ids.size(); ++i) {
+	bufferlist snapbl;
+	::encode(snap_ids[i], snapbl);
+	op.exec("rbd", "get_flags", snapbl);
+      }
+
+      snap_flags->clear();
+      snap_flags->resize(snap_ids.size());
+
+      bufferlist outbl;
+      int r = ioctx->operate(oid, &op, &outbl);
+      if (r < 0) {
+        return r;
+      }
+
+      try {
+        bufferlist::iterator iter = outbl.begin();
+        ::decode(*flags, iter);
+	for (size_t i = 0; i < snap_ids.size(); ++i) {
+	  ::decode((*snap_flags)[i], iter);
+	}
+      } catch (const buffer::error &err) {
+        return -EBADMSG;
+      }
+      return 0;
+    }
+
+    void set_flags(librados::ObjectWriteOperation *op, snapid_t snap_id,
+                   uint64_t flags, uint64_t mask)
+    {
+      bufferlist inbl;
+      ::encode(flags, inbl);
+      ::encode(mask, inbl);
+      ::encode(snap_id, inbl);
+      op->exec("rbd", "set_flags", inbl);
+    }
+
     int remove_parent(librados::IoCtx *ioctx, const std::string &oid)
     {
-      bufferlist inbl, outbl;
-      return ioctx->exec(oid, "rbd", "remove_parent", inbl, outbl);
+      librados::ObjectWriteOperation op;
+      remove_parent(&op);
+      return ioctx->operate(oid, &op);
+    }
+
+    void remove_parent(librados::ObjectWriteOperation *op)
+    {
+      bufferlist inbl;
+      op->exec("rbd", "remove_parent", inbl);
     }
 
     int add_child(librados::IoCtx *ioctx, const std::string &oid,
@@ -256,16 +315,23 @@ namespace librbd {
       return ioctx->exec(oid, "rbd", "add_child", in, out);
     }
 
-    int remove_child(librados::IoCtx *ioctx, const std::string &oid,
-		     parent_spec pspec, const std::string &c_imageid)
+    void remove_child(librados::ObjectWriteOperation *op,
+		      parent_spec pspec, const std::string &c_imageid)
     {
-      bufferlist in, out;
+      bufferlist in;
       ::encode(pspec.pool_id, in);
       ::encode(pspec.image_id, in);
       ::encode(pspec.snap_id, in);
       ::encode(c_imageid, in);
+      op->exec("rbd", "remove_child", in);
+    }
 
-      return ioctx->exec(oid, "rbd", "remove_child", in, out);
+    int remove_child(librados::IoCtx *ioctx, const std::string &oid,
+		     parent_spec pspec, const std::string &c_imageid)
+    {
+      librados::ObjectWriteOperation op;
+      remove_child(&op, pspec, c_imageid);
+      return ioctx->operate(oid, &op);
     }
 
     int get_children(librados::IoCtx *ioctx, const std::string &oid,
@@ -291,11 +357,18 @@ namespace librbd {
     int snapshot_add(librados::IoCtx *ioctx, const std::string &oid,
 		     snapid_t snap_id, const std::string &snap_name)
     {
-      bufferlist bl, bl2;
+      librados::ObjectWriteOperation op;
+      snapshot_add(&op, snap_id, snap_name);
+      return ioctx->operate(oid, &op);
+    }
+
+    void snapshot_add(librados::ObjectWriteOperation *op, snapid_t snap_id,
+		      const std::string &snap_name)
+    {
+      bufferlist bl;
       ::encode(snap_name, bl);
       ::encode(snap_id, bl);
-
-      return ioctx->exec(oid, "rbd", "snapshot_add", bl, bl2);
+      op->exec("rbd", "snapshot_add", bl);
     }
 
     int snapshot_remove(librados::IoCtx *ioctx, const std::string &oid,
@@ -635,5 +708,47 @@ namespace librbd {
       ::encode(id, in);
       return ioctx->exec(oid, "rbd", "dir_rename_image", in, out);
     }
+
+    int object_map_load(librados::IoCtx *ioctx, const std::string &oid,
+			ceph::BitVector<2> *object_map)
+    {
+      bufferlist in;
+      bufferlist out;
+      int r = ioctx->exec(oid, "rbd", "object_map_load", in, out);
+      if (r < 0) {
+	return r;
+      }
+
+      try {
+        bufferlist::iterator iter = out.begin();
+        ::decode(*object_map, iter);
+      } catch (const buffer::error &err) {
+        return -EBADMSG;
+      }
+      return 0;
+    }
+
+    void object_map_resize(librados::ObjectWriteOperation *rados_op,
+                           uint64_t object_count, uint8_t default_state)
+    {
+      bufferlist in;
+      ::encode(object_count, in);
+      ::encode(default_state, in);
+      rados_op->exec("rbd", "object_map_resize", in);
+    }
+
+    void object_map_update(librados::ObjectWriteOperation *rados_op,
+			   uint64_t start_object_no, uint64_t end_object_no,
+                           uint8_t new_object_state,
+			   const boost::optional<uint8_t> &current_object_state)
+    {
+      bufferlist in;
+      ::encode(start_object_no, in);
+      ::encode(end_object_no, in);
+      ::encode(new_object_state, in);
+      ::encode(current_object_state, in);
+      rados_op->exec("rbd", "object_map_update", in);
+    }
+
   } // namespace cls_client
 } // namespace librbd

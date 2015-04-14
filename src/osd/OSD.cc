@@ -138,6 +138,8 @@
 
 #ifdef WITH_LTTNG
 #include "tracing/osd.h"
+#else
+#define tracepoint(...)
 #endif
 
 static coll_t META_COLL("meta");
@@ -1486,7 +1488,9 @@ int OSD::peek_meta(ObjectStore *store, std::string& magic,
 // cons/des
 
 OSD::OSD(CephContext *cct_, ObjectStore *store_,
-	 int id, Messenger *internal_messenger, Messenger *external_messenger,
+	 int id,
+	 Messenger *internal_messenger,
+	 Messenger *external_messenger,
 	 Messenger *hb_clientm,
 	 Messenger *hb_front_serverm,
 	 Messenger *hb_back_serverm,
@@ -1497,13 +1501,13 @@ OSD::OSD(CephContext *cct_, ObjectStore *store_,
   osd_lock("OSD::osd_lock"),
   tick_timer(cct, osd_lock),
   authorize_handler_cluster_registry(new AuthAuthorizeHandlerRegistry(cct,
-								      cct->_conf->auth_supported.length() ?
-								      cct->_conf->auth_supported :
-								      cct->_conf->auth_cluster_required)),
+								      cct->_conf->auth_supported.empty() ?
+								      cct->_conf->auth_cluster_required :
+								      cct->_conf->auth_supported)),
   authorize_handler_service_registry(new AuthAuthorizeHandlerRegistry(cct,
-								      cct->_conf->auth_supported.length() ?
-								      cct->_conf->auth_supported :
-								      cct->_conf->auth_service_required)),
+								      cct->_conf->auth_supported.empty() ?
+								      cct->_conf->auth_service_required :
+								      cct->_conf->auth_supported)),
   cluster_messenger(internal_messenger),
   client_messenger(external_messenger),
   objecter_messenger(osdc_messenger),
@@ -1626,9 +1630,7 @@ public:
 bool OSD::asok_command(string command, cmdmap_t& cmdmap, string format,
 		       ostream& ss)
 {
-  Formatter *f = new_formatter(format);
-  if (!f)
-    f = new_formatter("json-pretty");
+  Formatter *f = Formatter::create(format, "json-pretty", "json-pretty");
   if (command == "status") {
     f->open_object_section("status");
     f->dump_stream("cluster_fsid") << superblock.cluster_fsid;
@@ -2060,7 +2062,6 @@ void OSD::create_logger()
 
   PerfCountersBuilder osd_plb(cct, "osd", l_osd_first, l_osd_last);
 
-  osd_plb.add_u64(l_osd_opq, "opq");       // op queue length (waiting to be processed yet)
   osd_plb.add_u64(l_osd_op_wip, "op_wip");   // rep ops currently being processed (primary)
 
   osd_plb.add_u64_counter(l_osd_op,       "op");           // client ops
@@ -2138,11 +2139,15 @@ void OSD::create_logger()
   osd_plb.add_u64_counter(l_osd_tier_dirty, "tier_dirty");
   osd_plb.add_u64_counter(l_osd_tier_clean, "tier_clean");
   osd_plb.add_u64_counter(l_osd_tier_delay, "tier_delay");
+  osd_plb.add_u64_counter(l_osd_tier_proxy_read, "tier_proxy_read");
 
   osd_plb.add_u64_counter(l_osd_agent_wake, "agent_wake");
   osd_plb.add_u64_counter(l_osd_agent_skip, "agent_skip");
   osd_plb.add_u64_counter(l_osd_agent_flush, "agent_flush");
   osd_plb.add_u64_counter(l_osd_agent_evict, "agent_evict");
+
+  osd_plb.add_u64_counter(l_osd_object_ctx_cache_hit, "object_ctx_cache_hit");
+  osd_plb.add_u64_counter(l_osd_object_ctx_cache_total, "object_ctx_cache_total");
 
   logger = osd_plb.create_perf_counters();
   cct->get_perfcounters_collection()->add(logger);
@@ -2387,7 +2392,9 @@ int OSD::shutdown()
   objecter_messenger->shutdown();
   hb_front_server_messenger->shutdown();
   hb_back_server_messenger->shutdown();
+
   peering_wq.clear();
+
   return r;
 }
 
@@ -2487,7 +2494,7 @@ PGPool OSD::_get_pool(int id, OSDMapRef createmap)
 
 PG *OSD::_open_lock_pg(
   OSDMapRef createmap,
-  spg_t pgid, bool no_lockdep_check, bool hold_map_lock)
+  spg_t pgid, bool no_lockdep_check)
 {
   assert(osd_lock.is_locked());
 
@@ -2626,7 +2633,7 @@ PG *OSD::_create_lock_pg(
   assert(osd_lock.is_locked());
   dout(20) << "_create_lock_pg pgid " << pgid << dendl;
 
-  PG *pg = _open_lock_pg(createmap, pgid, true, hold_map_lock);
+  PG *pg = _open_lock_pg(createmap, pgid, true);
 
   service.init_splits_between(pgid, pg->get_osdmap(), service.get_osdmap());
 
@@ -2772,12 +2779,6 @@ void OSD::load_pgs()
       continue;
     }
 
-    if (!osdmap->have_pg_pool(pgid.pool())) {
-      dout(10) << __func__ << ": skipping PG " << pgid << " because we don't have pool "
-	       << pgid.pool() << dendl;
-      continue;
-    }
-
     if (pgid.preferred() >= 0) {
       dout(10) << __func__ << ": skipping localized PG " << pgid << dendl;
       // FIXME: delete it too, eventually
@@ -2889,7 +2890,7 @@ void OSD::build_past_intervals_parallel()
 {
   map<PG*,pistate> pis;
 
-  // calculate untion of map range
+  // calculate junction of map range
   epoch_t end_epoch = superblock.oldest_map;
   epoch_t cur_epoch = superblock.newest_map;
   {
@@ -2900,7 +2901,7 @@ void OSD::build_past_intervals_parallel()
       PG *pg = i->second;
 
       epoch_t start, end;
-      if (!pg->_calc_past_interval_range(&start, &end))
+      if (!pg->_calc_past_interval_range(&start, &end, superblock.oldest_map))
         continue;
 
       dout(10) << pg->info.pgid << " needs " << start << "-" << end << dendl;
@@ -2939,8 +2940,11 @@ void OSD::build_past_intervals_parallel()
       vector<int> acting, up;
       int up_primary;
       int primary;
+      pg_t pgid = pg->info.pgid.pgid;
+      if (p.same_interval_since && last_map->get_pools().count(pgid.pool()))
+	pgid = pgid.get_ancestor(last_map->get_pg_num(pgid.pool()));
       cur_map->pg_to_up_acting_osds(
-	pg->info.pgid.pgid, &up, &up_primary, &acting, &primary);
+	pgid, &up, &up_primary, &acting, &primary);
 
       if (p.same_interval_since == 0) {
 	dout(10) << __func__ << " epoch " << cur_epoch << " pg " << pg->info.pgid
@@ -2966,7 +2970,7 @@ void OSD::build_past_intervals_parallel()
 	p.same_interval_since,
 	pg->info.history.last_epoch_clean,
 	cur_map, last_map,
-	pg->info.pgid.pgid,
+	pgid,
 	&pg->past_intervals,
 	&debug);
       if (new_interval) {
@@ -4163,6 +4167,10 @@ void OSD::RemoveWQ::_process(
   for (list<coll_t>::iterator i = colls_to_remove.begin();
        i != colls_to_remove.end();
        ++i) {
+    if (g_conf->osd_inject_failure_on_pg_removal) {
+      generic_derr << "osd_inject_failure_on_pg_removal" << dendl;
+      exit(1);
+    }
     t->remove_collection(*i);
   }
 
@@ -4406,7 +4414,8 @@ void OSD::_send_boot()
   }
 
   MOSDBoot *mboot = new MOSDBoot(superblock, service.get_boot_epoch(),
-                                 hb_back_addr, hb_front_addr, cluster_addr);
+                                 hb_back_addr, hb_front_addr, cluster_addr,
+				 CEPH_FEATURES_ALL);
   dout(10) << " client_addr " << client_messenger->get_myaddr()
 	   << ", cluster_addr " << cluster_addr
 	   << ", hb_back_addr " << hb_back_addr
@@ -4897,7 +4906,7 @@ void OSD::do_command(Connection *con, ceph_tid_t tid, vector<string>& cmd, buffe
   }
 
   cmd_getval(cct, cmdmap, "format", format);
-  f.reset(new_formatter(format));
+  f.reset(Formatter::create(format));
 
   if (prefix == "version") {
     if (f) {
@@ -5848,8 +5857,38 @@ bool OSD::scrub_random_backoff()
   return false;
 }
 
+bool OSD::scrub_time_permit(utime_t now)
+{
+  struct tm bdt; 
+  time_t tt = now.sec();
+  localtime_r(&tt, &bdt);
+  bool time_permit = false;
+  if (cct->_conf->osd_scrub_begin_hour < cct->_conf->osd_scrub_end_hour) {
+    if (bdt.tm_hour >= cct->_conf->osd_scrub_begin_hour && bdt.tm_hour < cct->_conf->osd_scrub_end_hour) {
+      time_permit = true;
+    }    
+  } else {
+    if (bdt.tm_hour >= cct->_conf->osd_scrub_begin_hour || bdt.tm_hour < cct->_conf->osd_scrub_end_hour) {
+      time_permit = true;
+    }    
+  }
+  if (!time_permit) {
+    dout(20) << "scrub_should_schedule should run between " << cct->_conf->osd_scrub_begin_hour
+            << " - " << cct->_conf->osd_scrub_end_hour
+            << " now " << bdt.tm_hour << " = no" << dendl;
+  } else {
+    dout(20) << "scrub_should_schedule should run between " << cct->_conf->osd_scrub_begin_hour
+            << " - " << cct->_conf->osd_scrub_end_hour
+            << " now " << bdt.tm_hour << " = yes" << dendl;
+  }
+  return time_permit;
+}
+
 bool OSD::scrub_should_schedule()
 {
+  if (!scrub_time_permit(ceph_clock_now(cct))) {
+    return false;
+  }
   double loadavgs[1];
   if (getloadavg(loadavgs, 1) != 1) {
     dout(10) << "scrub_should_schedule couldn't read loadavgs\n" << dendl;
@@ -7798,7 +7837,7 @@ void OSD::do_recovery(PG *pg, ThreadPool::TPHandle &handle)
     return;
   } else {
     pg->lock_suspend_timeout(handle);
-    if (pg->deleting || !(pg->is_active() && pg->is_primary())) {
+    if (pg->deleting || !(pg->is_peered() && pg->is_primary())) {
       pg->unlock();
       goto out;
     }
@@ -8220,7 +8259,7 @@ void OSD::ShardedOpWQ::_process(uint32_t thread_index, heartbeat_handle_d *hb ) 
   }
 
   lgeneric_subdout(osd->cct, osd, 30) << "dequeue status: ";
-  Formatter *f = new_formatter("json");
+  Formatter *f = Formatter::create("json");
   f->open_object_section("q");
   dump(f);
   f->close_section();
@@ -8626,7 +8665,13 @@ int OSD::init_op_flags(OpRequestRef& op)
       // watch state (and may return early if the watch exists) or, in
       // the case of ping, is simply a read op.
       op->set_read();
-      break;
+      // fall through
+    case CEPH_OSD_OP_NOTIFY:
+    case CEPH_OSD_OP_NOTIFY_ACK:
+      {
+        op->set_promote();
+        break;
+      }
 
     default:
       break;

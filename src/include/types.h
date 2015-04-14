@@ -482,6 +482,23 @@ inline ostream& operator<<(ostream& out, const weightf_t& w)
 }
 #endif
 
+struct weightf_t {
+  float v;
+  weightf_t(float _v) : v(_v) {}
+};
+
+inline ostream& operator<<(ostream& out, const weightf_t& w)
+{
+  if (w.v < -0.01) {
+    return out << "-";
+  } else if (w.v < 0.000001) {
+    return out << "0";
+  } else {
+    std::streamsize p = out.precision();
+    return out << std::fixed << std::setprecision(5) << w.v << std::setprecision(p);
+  }
+}
+
 struct shard_id_t {
   uint8_t id;
 

@@ -9,28 +9,37 @@
 #include <set>
 #include <string>
 #include <vector>
+#include <boost/optional.hpp>
 
 #include "common/Cond.h"
 #include "common/Mutex.h"
 #include "common/Readahead.h"
 #include "common/RWLock.h"
 #include "common/snap_types.h"
+#include "include/atomic.h"
 #include "include/buffer.h"
 #include "include/rbd/librbd.hpp"
 #include "include/rbd_types.h"
 #include "include/types.h"
+#include "include/xlist.h"
 #include "osdc/ObjectCacher.h"
 
 #include "cls/rbd/cls_rbd_client.h"
 #include "librbd/LibrbdWriteback.h"
+#include "librbd/ObjectMap.h"
 #include "librbd/SnapInfo.h"
 #include "librbd/parent_types.h"
 
 class CephContext;
+class Finisher;
 class PerfCounters;
 
 namespace librbd {
 
+  class AsyncOperation;
+  class AsyncRequest;
+  class AsyncResizeRequest;
+  class CopyupRequest;
   class ImageWatcher;
 
   struct ImageCtx {
@@ -62,18 +71,27 @@ namespace librbd {
 
     /**
      * Lock ordering:
-     * owner_lock, md_lock, cache_lock, snap_lock, parent_lock, refresh_lock,
-     * aio_lock
+     *
+     * owner_lock, md_lock, cache_lock, snap_lock, parent_lock,
+     * refresh_lock, object_map_lock, async_op_lock
      */
     RWLock owner_lock; // protects exclusive lock leadership updates
     RWLock md_lock; // protects access to the mutable image metadata that
-                   // isn't guarded by other locks below
-                   // (size, features, image locks, etc)
+                   // isn't guarded by other locks below, and blocks writes
+                   // when held exclusively, so snapshots can be consistent.
+                   // Fields guarded include:
+                   // flush_encountered
+                   // total_bytes_read
+                   // exclusive_locked
+                   // lock_tag
+                   // lockers
     Mutex cache_lock; // used as client_lock for the ObjectCacher
-    RWLock snap_lock; // protects snapshot-related member variables:
+    RWLock snap_lock; // protects snapshot-related member variables, features, and flags
     RWLock parent_lock; // protects parent_md and parent
     Mutex refresh_lock; // protects refresh_seq and last_refresh
-    Mutex aio_lock; // protects pending_aio and pending_aio_cond
+    RWLock object_map_lock; // protects object map updates and object_map itself
+    Mutex async_ops_lock; // protects async_ops and async_requests
+    Mutex copyup_list_lock; // protects copyup_waiting_list
 
     unsigned extra_read_flags;
 
@@ -88,6 +106,7 @@ namespace librbd {
     parent_info parent_md;
     ImageCtx *parent;
     uint64_t stripe_unit, stripe_count;
+    uint64_t flags;
 
     ceph_file_layout layout;
 
@@ -98,8 +117,18 @@ namespace librbd {
     Readahead readahead;
     uint64_t total_bytes_read;
 
-    Cond pending_aio_cond;
-    uint64_t pending_aio;
+    Finisher *copyup_finisher;
+    std::map<uint64_t, CopyupRequest*> copyup_list;
+
+    xlist<AsyncOperation*> async_ops;
+    xlist<AsyncRequest*> async_requests;
+    Cond async_requests_cond;
+
+    ObjectMap object_map;
+
+    atomic_t async_request_seq;
+
+    xlist<AsyncResizeRequest*> async_resize_reqs;
 
     /**
      * Either image_name or image_id must be set.
@@ -137,26 +166,36 @@ namespace librbd {
 
     void add_snap(std::string in_snap_name, librados::snap_t id,
 		  uint64_t in_size, uint64_t features,
-		  parent_info parent, uint8_t protection_status);
+		  parent_info parent, uint8_t protection_status,
+		  uint64_t flags);
     uint64_t get_image_size(librados::snap_t in_snap_id) const;
     int get_features(librados::snap_t in_snap_id,
 		     uint64_t *out_features) const;
+    bool test_features(uint64_t test_features) const;
+    int get_flags(librados::snap_t in_snap_id, uint64_t *flags) const;
+    bool test_flags(uint64_t test_flags) const;
+    int update_flags(librados::snap_t in_snap_id, uint64_t flag, bool enabled);
+
     const parent_info* get_parent_info(librados::snap_t in_snap_id) const;
     int64_t get_parent_pool_id(librados::snap_t in_snap_id) const;
     std::string get_parent_image_id(librados::snap_t in_snap_id) const;
     uint64_t get_parent_snap_id(librados::snap_t in_snap_id) const;
     int get_parent_overlap(librados::snap_t in_snap_id,
 			   uint64_t *overlap) const;
-    void aio_read_from_cache(object_t o, bufferlist *bl, size_t len,
-			     uint64_t off, Context *onfinish);
-    void write_to_cache(object_t o, bufferlist& bl, size_t len, uint64_t off,
-			Context *onfinish);
-    int read_from_cache(object_t o, bufferlist *bl, size_t len, uint64_t off);
+    void aio_read_from_cache(object_t o, uint64_t object_no, bufferlist *bl,
+			     size_t len, uint64_t off, Context *onfinish,
+			     int fadvise_flags);
+    void write_to_cache(object_t o, const bufferlist& bl, size_t len,
+			uint64_t off, Context *onfinish, int fadvise_flags);
+    int read_from_cache(object_t o, uint64_t object_no, bufferlist *bl,
+			size_t len, uint64_t off);
     void user_flushed();
     void flush_cache_aio(Context *onfinish);
     int flush_cache();
     void shutdown_cache();
     int invalidate_cache();
+    void invalidate_cache(Context *on_finish);
+    void invalidate_cache_completion(int r, Context *on_finish);
     void clear_nonexistence_cache();
     int register_watch();
     void unregister_watch();
@@ -164,7 +203,11 @@ namespace librbd {
 			 librados::snap_t in_snap_id);
     uint64_t prune_parent_extents(vector<pair<uint64_t,uint64_t> >& objectx,
 				  uint64_t overlap);
-    void wait_for_pending_aio();
+
+    void flush_async_operations();
+    void flush_async_operations(Context *on_finish);
+
+    void cancel_async_requests();
   };
 }
 

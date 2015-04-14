@@ -5,6 +5,7 @@
 #define CEPH_LIBRBD_CLS_RBD_CLIENT_H
 
 #include "cls/lock/cls_lock_types.h"
+#include "common/bit_vector.hpp"
 #include "common/snap_types.h"
 #include "include/rados/librados.hpp"
 #include "include/types.h"
@@ -40,22 +41,31 @@ namespace librbd {
 		 snapid_t snap_id, uint64_t *size, uint8_t *order);
     int set_size(librados::IoCtx *ioctx, const std::string &oid,
 		 uint64_t size);
-    int set_size(librados::IoCtx *ioctx, const std::string &oid,
-		 uint64_t size);
+    void set_size(librados::ObjectWriteOperation *op, uint64_t size);
     int get_parent(librados::IoCtx *ioctx, const std::string &oid,
 		   snapid_t snap_id, parent_spec *pspec,
 		   uint64_t *parent_overlap);
     int set_parent(librados::IoCtx *ioctx, const std::string &oid,
 		   parent_spec pspec, uint64_t parent_overlap);
+    int get_flags(librados::IoCtx *ioctx, const std::string &oid,
+		  uint64_t *flags, const std::vector<snapid_t> &snap_ids,
+		  vector<uint64_t> *snap_flags);
+    void set_flags(librados::ObjectWriteOperation *op, snapid_t snap_id,
+                   uint64_t flags, uint64_t mask);
     int remove_parent(librados::IoCtx *ioctx, const std::string &oid);
+    void remove_parent(librados::ObjectWriteOperation *op);
     int add_child(librados::IoCtx *ioctx, const std::string &oid,
 		  parent_spec pspec, const std::string &c_imageid);
+    void remove_child(librados::ObjectWriteOperation *op,
+		      parent_spec pspec, const std::string &c_imageid);
     int remove_child(librados::IoCtx *ioctx, const std::string &oid,
 		     parent_spec pspec, const std::string &c_imageid);
     int get_children(librados::IoCtx *ioctx, const std::string &oid,
 		     parent_spec pspec, set<string>& children);
     int snapshot_add(librados::IoCtx *ioctx, const std::string &oid,
 		     snapid_t snap_id, const std::string &snap_name);
+    void snapshot_add(librados::ObjectWriteOperation *op, snapid_t snap_id,
+		      const std::string &snap_name);
     int snapshot_remove(librados::IoCtx *ioctx, const std::string &oid,
 			snapid_t snap_id);
     int get_snapcontext(librados::IoCtx *ioctx, const std::string &oid,
@@ -98,6 +108,16 @@ namespace librbd {
     int dir_rename_image(librados::IoCtx *ioctx, const std::string &oid,
 			 const std::string &src, const std::string &dest,
 			 const std::string &id);
+
+    // operations on the rbd_object_map.$image_id object
+    int object_map_load(librados::IoCtx *ioctx, const std::string &oid,
+		        ceph::BitVector<2> *object_map);
+    void object_map_resize(librados::ObjectWriteOperation *rados_op,
+			   uint64_t object_count, uint8_t default_state);
+    void object_map_update(librados::ObjectWriteOperation *rados_op,
+			   uint64_t start_object_no, uint64_t end_object_no,
+			   uint8_t new_object_state,
+			   const boost::optional<uint8_t> &current_object_state);
 
     // class operations on the old format, kept for
     // backwards compatability

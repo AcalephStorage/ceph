@@ -62,6 +62,9 @@ inline std::ostream& operator<<(std::ostream& out, _bad_endl_use_dendl_t) {
 #define ldlog_p1(cct, sub, lvl)                 \
   (cct->_conf->subsys.should_gather((sub), (lvl)))
 
+#define ldlog_p1(cct, sub, lvl)                 \
+  (cct->_conf->subsys.should_gather((sub), (lvl)))
+
 // NOTE: depend on magic value in _ASSERT_H so that we detect when
 // /usr/include/assert.h clobbers our fancier version.
 #define dendl std::flush;				\

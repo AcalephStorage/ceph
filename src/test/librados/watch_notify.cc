@@ -98,6 +98,7 @@ public:
 
 // --
 
+#pragma GCC diagnostic ignored "-Wpragmas"
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wdeprecated-declarations"
 
@@ -215,6 +216,7 @@ TEST_F(LibRadosWatchNotifyECPP, WatchNotifyTimeout) {
 }
 
 #pragma GCC diagnostic pop
+#pragma GCC diagnostic warning "-Wpragmas"
 
 
 // --
@@ -263,7 +265,7 @@ TEST_F(LibRadosWatchNotify, Watch2Timeout) {
   ASSERT_LT(age, age_bound * 1000);
   ASSERT_GT(age, 0);
   rados_conf_set(cluster, "objecter_inject_no_watch_ping", "true");
-  int left = 300;
+  int left = 900;
   std::cout << "waiting up to " << left << " for osd to time us out ..."
 	    << std::endl;
   while (notify_err == 0 && --left) {

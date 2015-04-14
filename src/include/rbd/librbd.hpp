@@ -118,6 +118,7 @@ public:
   int features(uint64_t *features);
   int overlap(uint64_t *overlap);
   int get_flags(uint64_t *flags);
+
   /* exclusive lock feature */
   int is_exclusive_lock_owner(bool *is_owner);
 

@@ -91,13 +91,13 @@ MDS::MDS(const std::string &n, Messenger *m, MonClient *mc) :
   hb(NULL),
   beacon(m->cct, mc, n),
   authorize_handler_cluster_registry(new AuthAuthorizeHandlerRegistry(m->cct,
-								      m->cct->_conf->auth_supported.length() ?
-								      m->cct->_conf->auth_supported :
-								      m->cct->_conf->auth_cluster_required)),
+								      m->cct->_conf->auth_supported.empty() ?
+								      m->cct->_conf->auth_cluster_required :
+								      m->cct->_conf->auth_supported)),
   authorize_handler_service_registry(new AuthAuthorizeHandlerRegistry(m->cct,
-								      m->cct->_conf->auth_supported.length() ?
-								      m->cct->_conf->auth_supported :
-								      m->cct->_conf->auth_service_required)),
+								      m->cct->_conf->auth_supported.empty() ?
+								      m->cct->_conf->auth_service_required :
+								      m->cct->_conf->auth_supported)),
   name(n),
   whoami(MDS_RANK_NONE), incarnation(0),
   standby_for_rank(MDSMap::MDS_NO_STANDBY_PREF),
@@ -221,9 +221,7 @@ bool MDS::asok_command(string command, cmdmap_t& cmdmap, string format,
 {
   dout(1) << "asok_command: " << command << " (starting...)" << dendl;
 
-  Formatter *f = new_formatter(format);
-  if (!f)
-    f = new_formatter("json-pretty");
+  Formatter *f = Formatter::create(format, "json-pretty", "json-pretty");
   if (command == "status") {
 
     const OSDMap *osdmap = objecter->get_osdmap_read();
@@ -335,6 +333,20 @@ bool MDS::asok_command(string command, cmdmap_t& cmdmap, string format,
       command_flush_journal(f);
     } else if (command == "get subtrees") {
       command_get_subtrees(f);
+    } else if (command == "export dir") {
+      string path;
+      if(!cmd_getval(g_ceph_context, cmdmap, "path", path)) {
+	ss << "malformed path";
+        delete f;
+        return true;
+      }
+      int64_t rank;
+      if(!cmd_getval(g_ceph_context, cmdmap, "rank", rank)) {
+	ss << "malformed rank";
+        delete f;
+        return true;
+      }
+      command_export_dir(f, path, (mds_rank_t)rank);
     } else if (command == "force_readonly") {
       mds_lock.Lock();
       mdcache->force_readonly();
@@ -511,6 +523,43 @@ void MDS::command_get_subtrees(Formatter *f)
 }
 
 
+void MDS::command_export_dir(Formatter *f,
+    const std::string &path,
+    mds_rank_t target)
+{
+  int r = _command_export_dir(path, target);
+  f->open_object_section("results");
+  f->dump_int("return_code", r);
+  f->close_section(); // results
+}
+
+int MDS::_command_export_dir(
+    const std::string &path,
+    mds_rank_t target)
+{
+  filepath fp(path.c_str());
+
+  if (target == whoami || !mdsmap->is_up(target) || !mdsmap->is_in(target)) {
+    derr << "bad MDS target " << target << dendl;
+    return -ENOENT;
+  }
+
+  CInode *in = mdcache->cache_traverse(fp);
+  if (!in) {
+    derr << "Bath path '" << path << "'" << dendl;
+    return -ENOENT;
+  }
+  CDir *dir = in->get_dirfrag(frag_t());
+  if (!dir || !(dir->is_auth())) {
+    derr << "bad export_dir path dirfrag frag_t() or dir not auth" << dendl;
+    return -EINVAL;
+  }
+
+  mdcache->migrator->export_dir(dir, target);
+  return 0;
+}
+
+
 void MDS::set_up_admin_socket()
 {
   int r;
@@ -538,6 +587,12 @@ void MDS::set_up_admin_socket()
                                      "flush_path name=path,type=CephString",
                                      asok_hook,
                                      "flush an inode (and its dirfrags)");
+  r = admin_socket->register_command("export dir",
+                                     "export dir "
+                                     "name=path,type=CephString "
+                                     "name=rank,type=CephInt",
+                                     asok_hook,
+                                     "migrate a subtree to named MDS");
   assert(0 == r);
   r = admin_socket->register_command("session evict",
 				     "session evict name=client_id,type=CephString",
@@ -706,6 +761,7 @@ void MDS::create_logger()
 
   mdlog->create_logger();
   server->create_logger();
+  mdcache->register_perfcounters();
 }
 
 
@@ -1163,7 +1219,7 @@ COMMAND("heap " \
 // FIXME: reinstate dumpcache as an admin socket command
 //  -- it makes no sense for it to be a remote command when
 //     the output is a local file
-// FIXME: reinstate issue_caps, try_eval, fragment_dir, merge_dir, export_dir
+// FIXME: reinstate issue_caps, try_eval, fragment_dir, merge_dir
 //  *if* it makes sense to do so (or should these be admin socket things?)
 
 /* This function DOES put the passed message before returning*/
@@ -1770,6 +1826,10 @@ void MDS::boot_create()
 
   mdcache->init_layouts();
 
+  snapserver->set_rank(whoami);
+  inotable->set_rank(whoami);
+  sessionmap.set_rank(whoami);
+
   // start with a fresh journal
   dout(10) << "boot_create creating fresh journal" << dendl;
   mdlog->create(fin.new_sub());
@@ -1851,9 +1911,11 @@ void MDS::boot_start(BootStep step, int r)
         MDSGatherBuilder gather(g_ceph_context,
             new C_MDS_BootStart(this, MDS_BOOT_OPEN_ROOT));
         dout(2) << "boot_start " << step << ": opening inotable" << dendl;
+        inotable->set_rank(whoami);
         inotable->load(gather.new_sub());
 
         dout(2) << "boot_start " << step << ": opening sessionmap" << dendl;
+        sessionmap.set_rank(whoami);
         sessionmap.load(gather.new_sub());
 
         dout(2) << "boot_start " << step << ": opening mds log" << dendl;
@@ -1861,6 +1923,7 @@ void MDS::boot_start(BootStep step, int r)
 
         if (mdsmap->get_tableserver() == whoami) {
           dout(2) << "boot_start " << step << ": opening snap table" << dendl;
+          snapserver->set_rank(whoami);
           snapserver->load(gather.new_sub());
         }
 
@@ -2888,8 +2951,7 @@ bool MDS::ms_verify_authorizer(Connection *con, int peer_type,
 
       dout(10) << __func__ << ": parsing auth_cap_str='" << auth_cap_str << "'" << dendl;
       std::ostringstream errstr;
-      int parse_success = s->auth_caps.parse(auth_cap_str, &errstr);
-      if (parse_success == false) {
+      if (!s->auth_caps.parse(auth_cap_str, &errstr)) {
         dout(1) << __func__ << ": auth cap parse error: " << errstr.str()
           << " parsing '" << auth_cap_str << "'" << dendl;
       }
@@ -2942,7 +3004,14 @@ void MDS::set_want_state(MDSMap::DaemonState newstate)
  */
 void MDS::heartbeat_reset()
 {
-  assert(hb != NULL);
+  // Any thread might jump into mds_lock and call us immediately
+  // after a call to suicide() completes, in which case MDS::hb
+  // has been freed and we are a no-op.
+  if (!hb) {
+      assert(state == CEPH_MDS_STATE_DNE);
+      return;
+  }
+
   // NB not enabling suicide grace, because the mon takes care of killing us
   // (by blacklisting us) when we fail to send beacons, and it's simpler to
   // only have one way of dying.
@@ -2978,7 +3047,8 @@ void MDS::ProgressThread::shutdown()
   stopping = true;
   cond.Signal();
   mds->mds_lock.Unlock();
-  join();
+  if (is_started())
+    join();
   mds->mds_lock.Lock();
 }
 

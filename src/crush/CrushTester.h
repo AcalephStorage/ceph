@@ -334,6 +334,8 @@ public:
   }
 
   int test();
+  int test_with_crushtool(const string& crushtool,
+			  int timeout);
 };
 
 #endif

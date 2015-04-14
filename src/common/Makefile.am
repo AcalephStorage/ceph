@@ -33,7 +33,6 @@ libcommon_internal_la_SOURCES = \
 	common/str_map.cc \
 	common/errno.cc \
 	common/RefCountedObj.cc \
-	common/blkdev.cc \
 	common/common_init.cc \
 	common/pipe.c \
 	common/ceph_argparse.cc \
@@ -73,7 +72,18 @@ libcommon_internal_la_SOURCES = \
 	common/linux_version.c \
 	common/module.c \
 	common/Readahead.cc \
-	common/Cycles.cc
+	common/Cycles.cc \
+	common/ContextCompletion.cc
+
+if WITH_RBD
+libcommon_internal_la_SOURCES += \
+	common/blkdev.cc
+endif
+
+if ENABLE_XIO
+libcommon_internal_la_SOURCES += \
+	common/address_helper.cc
+endif
 
 # these should go out of libcommon_internal
 libcommon_internal_la_SOURCES += \
@@ -180,6 +190,7 @@ noinst_HEADERS += \
 	common/map_cacher.hpp \
 	common/MemoryModel.h \
 	common/Mutex.h \
+	common/QueueRing.h \
 	common/PrebufferedStreambuf.h \
 	common/RWLock.h \
 	common/Semaphore.h \
@@ -220,7 +231,15 @@ noinst_HEADERS += \
 	common/Continuation.h \
 	common/Readahead.h \
 	common/Cycles.h \
-	common/Initialize.h
+	common/Initialize.h \
+	common/ContextCompletion.h \
+	common/bit_vector.hpp
+
+if ENABLE_XIO
+noinst_HEADERS += \
+	common/address_helper.h
+endif
+
 
 libsecret_la_SOURCES = common/secret.c
 libsecret_la_LIBADD = $(KEYUTILS_LIB)

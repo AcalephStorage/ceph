@@ -36,6 +36,8 @@
 
 #ifdef WITH_LTTNG
 #include "tracing/librbd.h"
+#else
+#define tracepoint(...)
 #endif
 
 #define dout_subsys ceph_subsys_rbd
@@ -358,6 +360,15 @@ namespace librbd {
     return r;
   }
 
+  int Image::get_flags(uint64_t *flags)
+  {
+    ImageCtx *ictx = (ImageCtx *)ctx;
+    tracepoint(librbd, get_flags_enter, ictx);
+    int r = librbd::get_flags(ictx, flags);
+    tracepoint(librbd, get_flags_exit, ictx, r, *flags);
+    return r;
+  }
+
   int Image::is_exclusive_lock_owner(bool *is_owner)
   {
     ImageCtx *ictx = (ImageCtx *)ctx;
@@ -498,7 +509,8 @@ namespace librbd {
   {
     ImageCtx *ictx = (ImageCtx *)ctx;
     tracepoint(librbd, snap_create_enter, ictx, ictx->name.c_str(), ictx->snap_name.c_str(), ictx->read_only, snap_name);
-    int r = librbd::snap_create(ictx, snap_name);
+    RWLock::RLocker owner_locker(ictx->owner_lock);
+    int r = librbd::snap_create(ictx, snap_name, true);
     tracepoint(librbd, snap_create_exit, r);
     return r;
   }
@@ -1172,6 +1184,15 @@ extern "C" int rbd_get_parent_info(rbd_image_t image,
   return 0;
 }
 
+extern "C" int rbd_get_flags(rbd_image_t image, uint64_t *flags)
+{
+  librbd::ImageCtx *ictx = (librbd::ImageCtx *)image;
+  tracepoint(librbd, get_flags_enter, ictx);
+  int r = librbd::get_flags(ictx, flags);
+  tracepoint(librbd, get_flags_exit, ictx, r, *flags);
+  return r;
+}
+
 extern "C" int rbd_is_exclusive_lock_owner(rbd_image_t image, int *is_owner)
 {
   librbd::ImageCtx *ictx = (librbd::ImageCtx *)image;
@@ -1188,7 +1209,8 @@ extern "C" int rbd_snap_create(rbd_image_t image, const char *snap_name)
 {
   librbd::ImageCtx *ictx = (librbd::ImageCtx *)image;
   tracepoint(librbd, snap_create_enter, ictx, ictx->name.c_str(), ictx->snap_name.c_str(), ictx->read_only, snap_name);
-  int r = librbd::snap_create(ictx, snap_name);
+  RWLock::RLocker owner_locker(ictx->owner_lock);
+  int r = librbd::snap_create(ictx, snap_name, true);
   tracepoint(librbd, snap_create_exit, r);
   return r;
 }

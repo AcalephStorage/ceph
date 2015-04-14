@@ -14,26 +14,40 @@
 DIR=/tmp/install-deps.$$
 trap "rm -fr $DIR" EXIT
 mkdir -p $DIR
-
 if test $(id -u) != 0 ; then
     SUDO=sudo
+fi
+export LC_ALL=C # the following is vulnerable to i18n
+
+if test -f /etc/redhat-release ; then
+    $SUDO yum install -y redhat-lsb-core
+fi
+
+if which apt-get > /dev/null ; then
+    $SUDO apt-get install -y lsb-release
 fi
 
 case $(lsb_release -si) in
 Ubuntu|Debian|Devuan)
         $SUDO apt-get install -y dpkg-dev
+        if ! test -r debian/control ; then
+            echo debian/control is not a readable file
+            exit 1
+        fi
         touch $DIR/status
         packages=$(dpkg-checkbuilddeps --admindir=$DIR debian/control 2>&1 | \
             perl -p -e 's/.*Unmet build dependencies: *//;' \
             -e 's/build-essential:native/build-essential/;' \
+            -e 's/\|//g;' \
             -e 's/\(.*?\)//g;' \
             -e 's/ +/\n/g;' | sort)
         case $(lsb_release -sc) in
-            squeeze)
-                packages=$(echo $packages | perl -pe 's/\w*babeltrace\w*//g')
+            squeeze|wheezy)
+                packages=$(echo $packages | perl -pe 's/[-\w]*babeltrace[-\w]*//g')
                 ;;
         esac
-        $SUDO apt-get install -y $packages
+        packages=$(echo $packages) # change newlines into spaces
+        $SUDO bash -c "DEBIAN_FRONTEND=noninteractive apt-get install -y $packages"
         ;;
 CentOS|Fedora|SUSE*|RedHatEnterpriseServer)
         case $(lsb_release -si) in

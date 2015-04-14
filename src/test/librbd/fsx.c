@@ -343,6 +343,24 @@ librbd_close(struct rbd_ctx *ctx)
 	return __librbd_close(ctx);
 }
 
+int
+librbd_verify_object_map(struct rbd_ctx *ctx)
+{
+	int n;
+	uint64_t flags;
+	n = rbd_get_flags(ctx->image, &flags);
+	if (n < 0) {
+		prt("rbd_get_flags() failed\n");
+		return n;
+	}
+
+	if ((flags & RBD_FLAG_OBJECT_MAP_INVALID) != 0) {
+		prt("rbd_get_flags() indicates object map is invalid\n");
+		return -EINVAL;
+	}
+	return 0;
+}
+
 ssize_t
 librbd_read(struct rbd_ctx *ctx, uint64_t off, size_t len, void *buf)
 {
@@ -359,11 +377,18 @@ ssize_t
 librbd_write(struct rbd_ctx *ctx, uint64_t off, size_t len, void *buf)
 {
 	ssize_t n;
+	int ret;
 
 	n = rbd_write(ctx->image, off, len, buf);
-	if (n < 0)
+	if (n < 0) {
 		prt("rbd_write(%llu, %zu) failed\n", off, len);
+		return n;
+	}
 
+	ret = librbd_verify_object_map(ctx);
+	if (ret < 0) {
+		return ret;
+	}
 	return n;
 }
 
@@ -378,7 +403,7 @@ librbd_flush(struct rbd_ctx *ctx)
 		return ret;
 	}
 
-	return 0;
+	return librbd_verify_object_map(ctx);
 }
 
 int
@@ -392,7 +417,7 @@ librbd_discard(struct rbd_ctx *ctx, uint64_t off, uint64_t len)
 		return ret;
 	}
 
-	return 0;
+	return librbd_verify_object_map(ctx);
 }
 
 int
@@ -423,7 +448,7 @@ __librbd_resize(struct rbd_ctx *ctx, uint64_t size)
 		return ret;
 	}
 
-	return 0;
+	return librbd_verify_object_map(ctx);
 }
 
 int
@@ -435,7 +460,7 @@ librbd_resize(struct rbd_ctx *ctx, uint64_t size)
 int
 __librbd_clone(struct rbd_ctx *ctx, const char *src_snapname,
 	       const char *dst_imagename, int *order, int stripe_unit,
-	       int stripe_count)
+	       int stripe_count, bool krbd)
 {
 	int ret;
 
@@ -453,8 +478,13 @@ __librbd_clone(struct rbd_ctx *ctx, const char *src_snapname,
 		return ret;
 	}
 
+	uint64_t features = RBD_FEATURES_ALL;
+	if (krbd) {
+		features &= ~(RBD_FEATURE_EXCLUSIVE_LOCK |
+		              RBD_FEATURE_OBJECT_MAP);
+	}
 	ret = rbd_clone2(ioctx, ctx->name, src_snapname, ioctx,
-			 dst_imagename, RBD_FEATURES_ALL, order,
+			 dst_imagename, features, order,
 			 stripe_unit, stripe_count);
 	if (ret < 0) {
 		prt("rbd_clone2(%s@%s -> %s) failed\n", ctx->name,
@@ -471,7 +501,7 @@ librbd_clone(struct rbd_ctx *ctx, const char *src_snapname,
 	     int stripe_count)
 {
 	return __librbd_clone(ctx, src_snapname, dst_imagename, order,
-			      stripe_unit, stripe_count);
+			      stripe_unit, stripe_count, false);
 }
 
 int
@@ -485,7 +515,7 @@ __librbd_flatten(struct rbd_ctx *ctx)
 		return ret;
 	}
 
-	return 0;
+	return librbd_verify_object_map(ctx);
 }
 
 int
@@ -692,7 +722,7 @@ krbd_clone(struct rbd_ctx *ctx, const char *src_snapname,
 		return ret;
 
 	return __librbd_clone(ctx, src_snapname, dst_imagename, order,
-			      stripe_unit, stripe_count);
+			      stripe_unit, stripe_count, true);
 }
 
 int
