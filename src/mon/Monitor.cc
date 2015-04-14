@@ -340,7 +340,10 @@ abort:
 void Monitor::handle_signal(int signum)
 {
   assert(signum == SIGINT || signum == SIGTERM);
-  ///derr << "*** Got Signal " << sys_siglist[signum] << " ***" << dendl;
+#ifdef _WIN32
+#else
+  derr << "*** Got Signal " << sys_siglist[signum] << " ***" << dendl;
+#endif
   shutdown();
 }
 
@@ -2656,7 +2659,9 @@ void Monitor::handle_command(MMonCommand *m)
     rs = ds.str();
     r = 0;
   } else if (prefix == "heap") {
-/*    if (!ceph_using_tcmalloc())
+#ifdef _WIN32
+#else
+    if (!ceph_using_tcmalloc())
       rs = "tcmalloc not enabled, can't use heap profiler commands\n";
     else {
       string heapcmd;
@@ -2668,7 +2673,8 @@ void Monitor::handle_command(MMonCommand *m)
       rdata.append(ds);
       rs = "";
       r = 0;
-    }*/
+    }
+#endif
   } else if (prefix == "quorum") {
     string quorumcmd;
     cmd_getval(g_ceph_context, cmdmap, "quorumcmd", quorumcmd);
