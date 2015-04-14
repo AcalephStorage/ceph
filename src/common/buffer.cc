@@ -24,11 +24,9 @@
 #include "common/Mutex.h"
 #include "include/types.h"
 #include "include/compat.h"
-# if defined(HAVE_XIO)
-#  include "msg/xio/XioMsg.h"
-#  endif
-#include "include/buffer.h"
-
+#if defined(HAVE_XIO)
+#include "msg/xio/XioMsg.h"
+#endif
 
 #include <errno.h>
 #include <fstream>
