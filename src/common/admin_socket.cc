@@ -517,10 +517,10 @@ class HelpHook : public AdminSocketHook {
 public:
   HelpHook(AdminSocket *as) : m_as(as) {}
   bool call(string command, cmdmap_t &cmdmap, string format, bufferlist& out) {
+#ifdef _WIN32
     Formatter *f = new_formatter(format);
-#ifndef _WIN32
-    if (!f)
-      f = new_formatter("json-pretty");
+#else
+    Formatter *f = Formatter::create(format, "json-pretty", "json-pretty");
 #endif
     f->open_object_section("help");
     for (map<string,string>::iterator p = m_as->m_help.begin();
