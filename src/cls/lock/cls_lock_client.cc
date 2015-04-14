@@ -195,7 +195,11 @@ namespace rados {
 
       void Lock::assert_locked_exclusive(ObjectOperation *op)
       {
+#ifdef _WIN32        
         assert_locked(op, name, LOCK_EXCLUSIVE_one, cookie, tag);
+#else
+        assert_locked(op, name, LOCK_EXCLUSIVE, cookie, tag);
+#endif
       }
 
       void Lock::assert_locked_shared(ObjectOperation *op)
