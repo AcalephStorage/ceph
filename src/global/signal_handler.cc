@@ -28,7 +28,8 @@
 #include <stdlib.h>
 #include <sys/stat.h>
 #include <sys/types.h>
-/*
+#ifdef _WIN32
+#else
 void install_sighandler(int signum, signal_handler_t handler, int flags)
 {
   int ret;
@@ -50,7 +51,7 @@ void install_sighandler(int signum, signal_handler_t handler, int flags)
     exit(1);
   }
 }
-*/
+#endif
 void sighup_handler(int signum)
 {
   g_ceph_context->reopen_logs();
@@ -75,7 +76,8 @@ static void reraise_fatal(int signum)
   }
   exit(1);
 }
-/*
+#ifdef _WIN32
+#else
 static void handle_fatal_signal(int signum)
 {
   // This code may itself trigger a SIGSEGV if the heap is corrupt. In that
@@ -110,8 +112,8 @@ static void handle_fatal_signal(int signum)
   }
 
   reraise_fatal(signum);
-}*/
-/*
+}
+
 void install_standard_sighandlers(void)
 {
   install_sighandler(SIGSEGV, handle_fatal_signal, SA_RESETHAND | SA_NODEFER);
@@ -123,7 +125,7 @@ void install_standard_sighandlers(void)
   install_sighandler(SIGXFSZ, handle_fatal_signal, SA_RESETHAND | SA_NODEFER);
   install_sighandler(SIGSYS, handle_fatal_signal, SA_RESETHAND | SA_NODEFER);
 }
-*/
+#endif
 
 
 /// --- safe handler ---
@@ -166,7 +168,9 @@ struct SignalHandler : public Thread {
   SignalHandler()
     : stop(false), lock("SignalHandler::lock")
   {
-  /*  for (unsigned i = 0; i < 32; i++)
+#ifdef _WIN32
+#else
+    for (unsigned i = 0; i < 32; i++)
       handlers[i] = NULL;
 
     // create signal pipe
@@ -185,7 +189,8 @@ struct SignalHandler : public Thread {
     assert(r == 0);
 
     // create thread
-    create();*/
+    create();
+#endif
   }
 
   ~SignalHandler() {
@@ -205,7 +210,9 @@ struct SignalHandler : public Thread {
 
   // thread entry point
   void *entry() {
- /*   while (!stop) {
+#ifdef _WIN32
+#else
+    while (!stop) {
       // build fd list
       struct pollfd fds[33];
 
@@ -248,7 +255,8 @@ struct SignalHandler : public Thread {
       } else {
 	//cout << "no data, got r=" << r << " errno=" << errno << std::endl;
       }
-    }*/
+    }
+#endif
     return NULL;
   }
 
@@ -275,7 +283,8 @@ static void handler_hook(int signum)
 
 void SignalHandler::register_handler(int signum, signal_handler_t handler, bool oneshot)
 {
- /* 
+#ifdef _WIN32
+#else
   int r;
 
   assert(signum >= 0 && signum < 32);
@@ -310,12 +319,14 @@ void SignalHandler::register_handler(int signum, signal_handler_t handler, bool 
   act.sa_flags = oneshot ? SA_RESETHAND : 0;
 
   int ret = sigaction(signum, &act, &oldact);
-  assert(ret == 0);*/
+  assert(ret == 0);
+#endif
 }
 
 void SignalHandler::unregister_handler(int signum, signal_handler_t handler)
 {
-  /*
+#ifdef _WIN32
+#else
   assert(signum >= 0 && signum < 32);
   safe_handler *h = handlers[signum];
   assert(h);
@@ -332,7 +343,8 @@ void SignalHandler::unregister_handler(int signum, signal_handler_t handler)
   // this will wake up select() so that worker thread sees our handler is gone
   close(h->pipefd[0]);
   close(h->pipefd[1]);
-  delete h;*/
+  delete h;
+#endif
 }
 
 
