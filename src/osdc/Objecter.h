@@ -97,9 +97,8 @@ struct ObjectOperation {
     virtual ~C_TwoContexts() {
         delete first;
         delete second;
-
-    }
 #endif
+    }
   };
 
   /**
@@ -2184,9 +2183,9 @@ public:
     Op *o = prepare_read_op(oid, oloc, op, snapid, pbl, flags, onack, objver, data_offset);
     if (features)
       o->features = features;
+#endif
     return op_submit(o);
   }
-#endif
   ceph_tid_t pg_read(uint32_t hash, object_locator_t oloc,
 		ObjectOperation& op,
 		bufferlist *pbl, int flags,

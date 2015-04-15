@@ -277,9 +277,11 @@ void Monitor::do_admin_command(string command, cmdmap_t& cmdmap, string format,
 			       ostream& ss)
 {
   Mutex::Locker l(lock);
-
+#ifdef _WIN32
+  boost::scoped_ptr<Formatter> f(new_formatter(format));
+#else
   boost::scoped_ptr<Formatter> f(Formatter::create(format));
-
+#endif
   string args;
   for (cmdmap_t::iterator p = cmdmap.begin();
        p != cmdmap.end(); ++p) {
@@ -2460,7 +2462,7 @@ bool Monitor::_allowed_command(MonSession *s, string &module, string &prefix,
   bool cmd_w = this_cmd->requires_perm('w');
   bool cmd_x = this_cmd->requires_perm('x');
 
-  bool capable = s->caps.is_capable(g_ceph_context, s->entity_name,
+  bool capable = s->caps.is_capable(g_ceph_context, s->inst.name,
                                     module, prefix, param_str_map,
                                     cmd_r, cmd_w, cmd_x);
 
@@ -2570,7 +2572,11 @@ void Monitor::handle_command(MMonCommand *m)
   cmd_getval(g_ceph_context, cmdmap, "prefix", prefix);
   if (prefix == "get_command_descriptions") {
     bufferlist rdata;
+#ifdef _WIN32
+    Formatter *f = new_formatter("json");
+#else
     Formatter *f = Formatter::create("json");
+#endif
     format_command_descriptions(leader_supported_mon_commands,
 				leader_supported_mon_commands_size, f, &rdata);
     delete f;
@@ -2585,8 +2591,11 @@ void Monitor::handle_command(MMonCommand *m)
 
   string format;
   cmd_getval(g_ceph_context, cmdmap, "format", format, string("plain"));
+#ifdef _WIN32
+  boost::scoped_ptr<Formatter> f(new_formatter(format));
+#else
   boost::scoped_ptr<Formatter> f(Formatter::create(format));
-
+#endif
   get_str_vec(prefix, fullcmd);
   module = fullcmd[0];
 
@@ -2811,7 +2820,11 @@ void Monitor::handle_command(MMonCommand *m)
 
     // this must be formatted, in its current form
     if (!f)
-      f.reset(Formatter::create("json-pretty"));
+#ifdef _WIN32
+    f.reset(new_formatter("json-pretty"));
+#else
+    f.reset(Formatter::create("json-pretty"));
+#endif
     f->open_object_section("report");
     f->dump_stream("cluster_fingerprint") << fingerprint;
     f->dump_string("version", ceph_version_to_str());

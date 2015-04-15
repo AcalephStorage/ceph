@@ -1781,13 +1781,15 @@ bool OSDMonitor::prepare_boot(MOSDBoot *m)
     }
 
     // set features shared by the osd
+#ifdef _WIN32
+#else
     if (m->osd_features)
       xi.features = m->osd_features;
     else
       xi.features = m->get_connection()->get_features();
 
     pending_inc.new_xinfo[from] = xi;
-
+#endif
     // wait
     wait_for_finished_proposal(new C_Booted(this, m));
   }
@@ -2639,8 +2641,11 @@ bool OSDMonitor::preprocess_command(MMonCommand *m)
 
   string format;
   cmd_getval(g_ceph_context, cmdmap, "format", format, string("plain"));
+#ifdef _WIN32
+  boost::scoped_ptr<Formatter> f(new_formatter(format));
+#else
   boost::scoped_ptr<Formatter> f(Formatter::create(format));
-
+#endif
   if (prefix == "osd stat") {
     osdmap.print_summary(f.get(), ds);
     if (f)
@@ -2789,7 +2794,11 @@ bool OSDMonitor::preprocess_command(MMonCommand *m)
     }
     string format;
     cmd_getval(g_ceph_context, cmdmap, "format", format);
+#ifdef _WIN32
+    boost::scoped_ptr<Formatter> f(new_formatter(format));
+#else
     boost::scoped_ptr<Formatter> f(Formatter::create(format, "json-pretty", "json-pretty"));
+#endif
     f->open_object_section("osd_location");
     f->dump_int("osd", osd);
     f->dump_stream("ip") << osdmap.get_addr(osd);
@@ -2815,7 +2824,11 @@ bool OSDMonitor::preprocess_command(MMonCommand *m)
     }
     string format;
     cmd_getval(g_ceph_context, cmdmap, "format", format);
+#ifdef _WIN32
+    boost::scoped_ptr<Formatter> f(new_formatter(format));
+#else
     boost::scoped_ptr<Formatter> f(Formatter::create(format, "json-pretty", "json-pretty"));
+#endif
     f->open_object_section("osd_metadata");
     r = dump_osd_metadata(osd, f.get(), &ss);
     if (r < 0)
@@ -3316,7 +3329,11 @@ stats_out:
 	     prefix == "osd crush rule ls") {
     string format;
     cmd_getval(g_ceph_context, cmdmap, "format", format);
+#ifdef _WIN32
+    boost::scoped_ptr<Formatter> f(new_formatter(format));
+#else
     boost::scoped_ptr<Formatter> f(Formatter::create(format, "json-pretty", "json-pretty"));
+#endif
     f->open_array_section("rules");
     osdmap.crush->list_rules(f.get());
     f->close_section();
@@ -3329,7 +3346,11 @@ stats_out:
     cmd_getval(g_ceph_context, cmdmap, "name", name);
     string format;
     cmd_getval(g_ceph_context, cmdmap, "format", format);
+#ifdef _WIN32
+    boost::scoped_ptr<Formatter> f(new_formatter(format));
+#else
     boost::scoped_ptr<Formatter> f(Formatter::create(format, "json-pretty", "json-pretty"));
+#endif    
     if (name == "") {
       f->open_array_section("rules");
       osdmap.crush->dump_rules(f.get());
@@ -3350,7 +3371,11 @@ stats_out:
   } else if (prefix == "osd crush dump") {
     string format;
     cmd_getval(g_ceph_context, cmdmap, "format", format);
+#ifdef _WIN32
+    boost::scoped_ptr<Formatter> f(new_formatter(format));
+#else
     boost::scoped_ptr<Formatter> f(Formatter::create(format, "json-pretty", "json-pretty"));
+#endif    
     f->open_object_section("crush_map");
     osdmap.crush->dump(f.get());
     f->close_section();
@@ -3361,7 +3386,11 @@ stats_out:
   } else if (prefix == "osd crush show-tunables") {
     string format;
     cmd_getval(g_ceph_context, cmdmap, "format", format);
+#ifdef _WIN32
+    boost::scoped_ptr<Formatter> f(new_formatter(format));
+#else
     boost::scoped_ptr<Formatter> f(Formatter::create(format, "json-pretty", "json-pretty"));
+#endif    
     f->open_object_section("crush_map_tunables");
     osdmap.crush->dump_tunables(f.get());
     f->close_section();
@@ -4458,8 +4487,11 @@ bool OSDMonitor::prepare_command_impl(MMonCommand *m,
 
   string format;
   cmd_getval(g_ceph_context, cmdmap, "format", format, string("plain"));
+#ifdef _WIN32
+  boost::scoped_ptr<Formatter> f(new_formatter(format));
+#else
   boost::scoped_ptr<Formatter> f(Formatter::create(format));
-
+#endif
   string prefix;
   cmd_getval(g_ceph_context, cmdmap, "prefix", prefix);
 
@@ -4526,6 +4558,10 @@ bool OSDMonitor::prepare_command_impl(MMonCommand *m,
     dout(10) << " testing map" << dendl;
     stringstream ess;
     CrushTester tester(crush, ess);
+#ifdef _WIN32
+    tester.test();
+    dout(10) << " result " << ess.str() << dendl;
+#else
     int r = tester.test_with_crushtool(g_conf->crushtool,
 				       g_conf->mon_lease);
     if (r < 0) {
@@ -4540,7 +4576,7 @@ bool OSDMonitor::prepare_command_impl(MMonCommand *m,
     }
 
     dout(10) << " result " << ess.str() << dendl;
-
+#endif
     pending_inc.crush = data;
     ss << "set crush map";
     goto update;

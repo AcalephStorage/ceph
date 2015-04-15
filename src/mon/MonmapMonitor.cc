@@ -216,7 +216,11 @@ bool MonmapMonitor::preprocess_command(MMonCommand *m)
       string format;
       cmd_getval(g_ceph_context, cmdmap, "format", format, string("plain"));
       stringstream ds;
+#ifdef _WIN32
+      boost::scoped_ptr<Formatter> f(new_formatter(format));
+#else
       boost::scoped_ptr<Formatter> f(Formatter::create(format));
+#endif
       if (f) {
         f->open_object_section("monmap");
         p->dump(f.get());

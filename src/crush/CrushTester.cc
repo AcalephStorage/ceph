@@ -1,16 +1,17 @@
 
-#include "include/stringify.h"
 #include "CrushTester.h"
 
 #include <algorithm>
 #include <stdlib.h>
+#ifdef _WIN32
+#else
 /* fork */
 #include <unistd.h>
 /* waitpid */
 #include <sys/types.h>
 #include <sys/wait.h>
 #include <common/errno.h>
-
+#endif
 void CrushTester::set_device_weight(int dev, float f)
 {
   int w = (int)(f * 0x10000);
@@ -371,16 +372,23 @@ void CrushTester::write_integer_indexed_scalar_data_string(vector<string> &dst, 
 int CrushTester::test_with_crushtool(const string& crushtool,
                                      int timeout)
 {
+#ifdef _WIN32
+#else
   string timeout_string = stringify(timeout);
+#endif
   vector<const char *> cmd_args;
   cmd_args.push_back("timeout");
+#ifdef _WIN32
+#else
   cmd_args.push_back(timeout_string.c_str());
+#endif
   cmd_args.push_back(crushtool.c_str());
   cmd_args.push_back("-i");
   cmd_args.push_back("-");
   cmd_args.push_back("--test");
   cmd_args.push_back(NULL);
-
+#ifdef _WIN32
+#else
   int pipefds[2];
   if (::pipe(pipefds) == -1) {
     int r = errno;
@@ -443,6 +451,8 @@ int CrushTester::test_with_crushtool(const string& crushtool,
   // log it and consider an invalid crush map
   err << "error running crushmap through crushtool: " << cpp_strerror(r);
   return -r;
+#endif
+  return -1;
 }
 
 int CrushTester::test()

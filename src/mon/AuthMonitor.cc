@@ -558,8 +558,11 @@ bool AuthMonitor::preprocess_command(MMonCommand *m)
 
   string format;
   cmd_getval(g_ceph_context, cmdmap, "format", format, string("plain"));
+#ifdef _WIN32
+  boost::scoped_ptr<Formatter> f(new_formatter(format));
+#else
   boost::scoped_ptr<Formatter> f(Formatter::create(format));
-
+#endif
   if (prefix == "auth export") {
     KeyRing keyring;
     export_keyring(keyring);
@@ -686,8 +689,11 @@ bool AuthMonitor::prepare_command(MMonCommand *m)
 
   string format;
   cmd_getval(g_ceph_context, cmdmap, "format", format, string("plain"));
+#ifdef _WIN32
+  boost::scoped_ptr<Formatter> f(new_formatter(format));
+#else
   boost::scoped_ptr<Formatter> f(Formatter::create(format));
-
+#endif
   MonSession *session = m->get_session();
   if (!session) {
     mon->reply_command(m, -EACCES, "access denied", rdata, get_last_committed());

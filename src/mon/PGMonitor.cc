@@ -1517,8 +1517,11 @@ bool PGMonitor::preprocess_command(MMonCommand *m)
 
   string format;
   cmd_getval(g_ceph_context, cmdmap, "format", format, string("plain"));
+#ifdef _WIN32
+  boost::scoped_ptr<Formatter> f(new_formatter(format));
+#else  
   boost::scoped_ptr<Formatter> f(Formatter::create(format));
-
+#endif
   if (prefix == "pg stat") {
     if (f) {
       f->open_object_section("pg_summary");

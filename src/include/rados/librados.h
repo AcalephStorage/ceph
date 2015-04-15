@@ -18,8 +18,9 @@
 #ifdef __cplusplus
 extern "C" {
 #endif
-
+#ifndef _WIN32
 #include <netinet/in.h>
+#endif
 #if defined(__linux__)
 #include <linux/types.h>
 #elif defined(__FreeBSD__)
