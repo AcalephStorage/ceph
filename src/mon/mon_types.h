@@ -101,7 +101,6 @@ struct LevelDBStoreStats {
     ls.back()->bytes_misc = 256*1024;
     ls.back()->last_update = utime_t();
   }
-
 };
 WRITE_CLASS_ENCODER(LevelDBStoreStats)
 

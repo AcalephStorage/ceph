@@ -1210,7 +1210,7 @@ void OSDMap::remove_redundant_temporaries(CephContext *cct, const OSDMap& osdmap
        p != osdmap.pg_temp->end();
        ++p) {
 #ifdef _WIN32
-    if (pending_inc->new_pg_temp.count(p->first) == 0) {
+    if (pending_inc->new_pg_temp.count(p->first) == 0)
 #else
 
     // if pool does not exist, remove any existing pg_temps associated with
@@ -1221,8 +1221,10 @@ void OSDMap::remove_redundant_temporaries(CephContext *cct, const OSDMap& osdmap
         << " for inexistent pool " << p->first.pool() << dendl;
       pending_inc->new_pg_temp[p->first].clear();
 
-    } else if (pending_inc->new_pg_temp.count(p->first) == 0) {
+    } else if (pending_inc->new_pg_temp.count(p->first) == 0) 
 #endif
+    {
+
       vector<int> raw_up;
       int primary;
       osdmap.pg_to_raw_up(p->first, &raw_up, &primary);
@@ -2771,6 +2773,10 @@ void OSDMap::print_summary(Formatter *f, ostream& out) const
     f->dump_int("num_in_osds", get_num_in_osds());
     f->dump_bool("full", test_flag(CEPH_OSDMAP_FULL) ? true : false);
     f->dump_bool("nearfull", test_flag(CEPH_OSDMAP_NEARFULL) ? true : false);
+#ifdef _WIN32
+#else    
+    f->dump_unsigned("num_remapped_pgs", get_num_pg_temp());
+#endif
     f->close_section();
   } else {
 #ifdef _WIN32

@@ -17,5 +17,5 @@
 					 RBD_FEATURE_STRIPINGV2 |     \
                                    	 RBD_FEATURE_EXCLUSIVE_LOCK | \
                                          RBD_FEATURE_OBJECT_MAP)
-#endif
 
+#endif

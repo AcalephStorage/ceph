@@ -5,10 +5,10 @@
                                                 (-l includes snapshots/clones)
     info <image-name>                           show information about image size,
                                                 striping, etc.
-    create [--order <bits>] [--image-shared] --size <MB> <name>
-                                                create an empty image
-    clone [--order <bits>] [--image-shared] <parentsnap> <clonename>
-                                                clone a snapshot into a COW
+    create [--order <bits>] [--image-features <features>] [--image-shared]
+           --size <MB> <name>                   create an empty image
+    clone [--order <bits>] [--image-features <features>] [--image-shared]
+          <parentsnap> <clonename>              clone a snapshot into a COW
                                                 child image
     children <snap-name>                        display children of snapshot
     flatten <image-name>                        fill clone with parent data
@@ -17,15 +17,19 @@
     rm <image-name>                             delete an image
     export <image-name> <path>                  export image to file
                                                 "-" for stdout
-    import [--image-shared] <path> <image-name> import image from file
-                                                (dest defaults
-                                                 as the filename part of file)
-                                                "-" for stdin
+    import [--image-features <features>] [--image-shared]
+           <path> <image-name>                  import image from file (dest
+                                                defaults as the filename part
+                                                of file). "-" for stdin
     diff <image-name> [--from-snap <snap-name>] print extents that differ since
                                                 a previous snap, or image creation
     export-diff <image-name> [--from-snap <snap-name>] <path>
                                                 export an incremental diff to
                                                 path, or "-" for stdout
+    merge-diff <diff1> <diff2> <path>           merge <diff1> and <diff2> into
+                                                <path>, <diff1> could be "-"
+                                                for stdin, and <path> could be "-"
+                                                for stdout
     import-diff <path> <image-name>             import an incremental diff from
                                                 path or "-" for stdin
     (cp | copy) <src> <dest>                    copy src image to dest
@@ -38,6 +42,7 @@
     snap protect <snap-name>                    prevent a snapshot from being deleted
     snap unprotect <snap-name>                  allow a snapshot to be deleted
     watch <image-name>                          watch events on image
+    status <image-name>                         show the status of this image
     map <image-name>                            map image to a block device
                                                 using the kernel
     unmap <device>                              unmap a rbd device that was
@@ -69,8 +74,13 @@
     --image-format <format-number>     format to use when creating an image
                                        format 1 is the original format (default)
                                        format 2 supports cloning
+    --image-features <features>        optional format 2 features to enable
+                                       +1 layering support, +2 striping v2,
+                                       +4 exclusive lock, +8 object map
     --image-shared                     image will be used concurrently (disables
                                        RBD exclusive lock and dependent features)
+    --stripe-unit <size-in-bytes>      size (in bytes) of a block of data
+    --stripe-count <num>               number of consecutive objects in a stripe
     --id <username>                    rados user (without 'client.'prefix) to
                                        authenticate as
     --keyfile <path>                   file containing secret key for use with cephx

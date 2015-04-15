@@ -60,7 +60,6 @@ using namespace std;
 
 enum {
   l_osd_first = 10000,
-  l_osd_opq,
   l_osd_op_wip,
   l_osd_op,
   l_osd_op_inb,
@@ -135,11 +134,15 @@ enum {
   l_osd_tier_dirty,
   l_osd_tier_clean,
   l_osd_tier_delay,
+  l_osd_tier_proxy_read,
 
   l_osd_agent_wake,
   l_osd_agent_skip,
   l_osd_agent_flush,
   l_osd_agent_evict,
+
+  l_osd_object_ctx_cache_hit,
+  l_osd_object_ctx_cache_total,
 
   l_osd_last,
 };
@@ -1490,9 +1493,13 @@ private:
       void dump(Formatter *f) {
         for(uint32_t i = 0; i < num_shards; i++) {
           ShardData* sdata = shard_list[i];
+	  char lock_name[32] = {0};
+          snprintf(lock_name, sizeof(lock_name), "%s%d", "OSD:ShardedOpWQ:", i);
           assert (NULL != sdata);
           sdata->sdata_op_ordering_lock.Lock();
-          sdata->pqueue.dump(f);
+	  f->open_object_section(lock_name);
+	  sdata->pqueue.dump(f);
+	  f->close_section();
           sdata->sdata_op_ordering_lock.Unlock();
         }
       }
@@ -1682,8 +1689,7 @@ protected:
   PG   *_lookup_lock_pg(spg_t pgid);
   PG   *_lookup_pg(spg_t pgid);
   PG   *_open_lock_pg(OSDMapRef createmap,
-		      spg_t pg, bool no_lockdep_check=false,
-		      bool hold_map_lock=false);
+		      spg_t pg, bool no_lockdep_check=false);
   enum res_result {
     RES_PARENT,    // resurrected a parent
     RES_SELF,      // resurrected self
@@ -2079,7 +2085,9 @@ protected:
       pg->put("SnapTrimWQ");
     }
     void _clear() {
-      osd->snap_trim_queue.clear();
+      while (PG *pg = _dequeue()) {
+	pg->put("SnapTrimWQ");
+      }
     }
   } snap_trim_wq;
 
@@ -2088,6 +2096,7 @@ protected:
   void sched_scrub();
   bool scrub_random_backoff();
   bool scrub_should_schedule();
+  bool scrub_time_permit(utime_t now);
 
   xlist<PG*> scrub_queue;
 
@@ -2164,21 +2173,20 @@ protected:
     void _process(
       MOSDRepScrub *msg,
       ThreadPool::TPHandle &handle) {
-      osd->osd_lock.Lock();
-      if (osd->is_stopping()) {
-	osd->osd_lock.Unlock();
-	return;
+      PG *pg = NULL;
+      {
+	Mutex::Locker lock(osd->osd_lock);
+	if (osd->is_stopping() ||
+	    !osd->_have_pg(msg->pgid)) {
+	  msg->put();
+	  return;
+	}
+	pg = osd->_lookup_lock_pg(msg->pgid);
       }
-      if (osd->_have_pg(msg->pgid)) {
-	PG *pg = osd->_lookup_lock_pg(msg->pgid);
-	osd->osd_lock.Unlock();
-	pg->replica_scrub(msg, handle);
-	msg->put();
-	pg->unlock();
-      } else {
-	msg->put();
-	osd->osd_lock.Unlock();
-      }
+      assert(pg);
+      pg->replica_scrub(msg, handle);
+      msg->put();
+      pg->unlock();
     }
     void _clear() {
       while (!rep_scrub_queue.empty()) {

@@ -18,22 +18,18 @@
 #ifdef __cplusplus
 extern "C" {
 #endif
-#ifndef _WIN32
+
 #include <netinet/in.h>
-#endif
 #if defined(__linux__)
 #include <linux/types.h>
 #elif defined(__FreeBSD__)
 #include <sys/types.h>
 #endif
-#ifndef _WIN32
 #include <unistd.h>
-#endif
 #include <string.h>
 #include "rados_types.h"
 
 #include <sys/time.h>
-#include <sys/types.h>
 
 #ifndef CEPH_OSD_TMAP_SET
 /* These are also defined in rados.h and objclass.h. Keep them in sync! */
@@ -2225,6 +2221,7 @@ CEPH_RADOS_API void rados_write_op_assert_exists(rados_write_op_t write_op);
  * @param ver object version number
  */
 CEPH_RADOS_API void rados_write_op_assert_version(rados_write_op_t write_op, uint64_t ver);
+
 /**
  * Ensure that given xattr satisfies comparison.
  * If the comparison is not satisfied, the return code of the
@@ -2483,6 +2480,7 @@ CEPH_RADOS_API void rados_read_op_assert_exists(rados_read_op_t read_op);
  * @param ver object version number
  */
 CEPH_RADOS_API void rados_read_op_assert_version(rados_read_op_t write_op, uint64_t ver);
+
 /**
  * Ensure that the an xattr satisfies a comparison
  * If the comparison is not satisfied, the return code of the
@@ -2811,6 +2809,7 @@ CEPH_RADOS_API int rados_break_lock(rados_ioctx_t io, const char *o,
 CEPH_RADOS_API int rados_blacklist_add(rados_t cluster,
 				       char *client_address,
 				       uint32_t expire_seconds);
+
 /**
  * @defgroup librados_h_commands Mon/OSD/PG Commands
  *
@@ -2911,7 +2910,8 @@ CEPH_RADOS_API int rados_pg_command(rados_t cluster, const char *pgstr,
  *
  * @param cluster cluster handle
  * @param level minimum log level (debug, info, warn|warning, err|error)
- * @param cb callback to run for each log message
+ * @param cb callback to run for each log message. It MUST NOT block
+ * nor call back into librados.
  * @param arg void argument to pass to cb
  *
  * @returns 0 on success, negative code on error

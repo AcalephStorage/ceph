@@ -14,7 +14,6 @@
 namespace rados {
   namespace cls {
     namespace lock {
-
       extern void lock(librados::ObjectWriteOperation *rados_op,
 		       const std::string& name, ClsLockType type,
 		       const std::string& cookie, const std::string& tag,

@@ -1,10 +1,10 @@
 # generic entries
 Makefile
-acconfig.h
-ceph_ver.h
+
 # local directory specific entries
 /.git_version
 /.libs
+/acconfig.h*
 /ceph
 /cephfs
 /crushtool
@@ -50,6 +50,7 @@ ceph_ver.h
 /ceph-monstore-tool
 /ceph-osdomap-tool
 /ceph-kvstore-tool
+/ceph_ver.h
 /dev
 /get_command_descriptions
 /init-ceph
@@ -81,7 +82,6 @@ ceph_ver.h
 /unittest_*
 /xio_client
 /xio_server
-/nbproject
 
 # old dir, may in use by older branches
 /leveldb

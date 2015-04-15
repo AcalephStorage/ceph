@@ -40,7 +40,7 @@ std::string TestFixture::_pool_name;
 librados::Rados TestFixture::_rados;
 uint64_t TestFixture::_image_number = 0;
 
-TestFixture::TestFixture() {
+TestFixture::TestFixture() : m_image_size(0) {
 }
 
 void TestFixture::SetUpTestCase() {
@@ -89,7 +89,7 @@ void TestFixture::close_image(librbd::ImageCtx *ictx) {
 
 int TestFixture::lock_image(librbd::ImageCtx &ictx, ClsLockType lock_type,
 			    const std::string &cookie) {
-  int r = rados::cls::lock::lock(&m_ioctx, ictx.header_oid, RBD_LOCK_NAME,
+  int r = rados::cls::lock::lock(&ictx.md_ctx, ictx.header_oid, RBD_LOCK_NAME,
       			   lock_type, cookie, "internal", "", utime_t(),
       			   0);
   if (r == 0) {

@@ -108,8 +108,8 @@ Install Ceph client packages
 
 On the ``glance-api`` node, you'll need the Python bindings for ``librbd``::
 
-  sudo apt-get install python-ceph
-  sudo yum install python-ceph
+  sudo apt-get install python-rbd
+  sudo yum install python-rbd
 
 On the ``nova-compute``, ``cinder-backup`` and on the ``cinder-volume`` node,
 use both the Python bindings and the client command line tools::
@@ -200,6 +200,10 @@ Juno
 
 Edit ``/etc/glance/glance-api.conf`` and add under the ``[glance_store]`` section::
 
+    [DEFAULT]
+    ...
+    default_store = rbd
+    ...
     [glance_store]
     stores = rbd
     rbd_store_pool = images
@@ -210,6 +214,8 @@ Edit ``/etc/glance/glance-api.conf`` and add under the ``[glance_store]`` sectio
 
 For more information about the configuration options available in Glance please see: http://docs.openstack.org/trunk/config-reference/content/section_glance-api.conf.html.
 
+.. important:: Glance has not completely moved to 'store' yet.
+    So we still need to configure the store in the DEFAULT section.
 
 Any OpenStack version
 ~~~~~~~~~~~~~~~~~~~~~

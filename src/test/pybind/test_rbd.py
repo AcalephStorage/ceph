@@ -1,6 +1,5 @@
 # vim: expandtab smarttab shiftwidth=4 softtabstop=4
 import functools
-import random
 import socket
 import struct
 import os
@@ -8,7 +7,10 @@ import os
 from contextlib import nested
 from nose import with_setup, SkipTest
 from nose.tools import eq_ as eq, assert_raises
-from rados import Rados
+from rados import (Rados,
+                   LIBRADOS_OP_FLAG_FADVISE_DONTNEED,
+                   LIBRADOS_OP_FLAG_FADVISE_NOCACHE,
+                   LIBRADOS_OP_FLAG_FADVISE_RANDOM)
 from rbd import (RBD, Image, ImageNotFound, InvalidArgument, ImageExists,
                  ImageBusy, ImageHasSnapshots, ReadOnlyImage,
                  FunctionNotSupported, ArgumentOutOfRange,
@@ -84,6 +86,17 @@ def require_features(required_features):
         return functools.wraps(fn)(_require_features)
     return wrapper
 
+def blacklist_features(blacklisted_features):
+    def wrapper(fn):
+        def _blacklist_features(*args, **kwargs):
+            global features
+            for feature in blacklisted_features:
+                if features is not None and feature & features == feature:
+                    raise SkipTest
+            return fn(*args, **kwargs)
+        return functools.wraps(fn)(_blacklist_features)
+    return wrapper
+
 def test_version():
     RBD().version()
 
@@ -124,7 +137,7 @@ def check_default_params(format, order=None, features=None, stripe_count=None,
 
                     expected_features = features
                     if expected_features is None or format == 1:
-                        expected_features = 0 if format == 1 else 7
+                        expected_features = 0 if format == 1 else 3
                     eq(expected_features, image.features())
 
                     expected_stripe_count = stripe_count
@@ -250,8 +263,7 @@ def test_rename():
     eq([image_name], rbd.list(ioctx))
 
 def rand_data(size):
-    l = [random.Random().getrandbits(64) for _ in xrange(size/8)]
-    return struct.pack((size/8)*'Q', *l)
+    return os.urandom(size)
 
 def check_stat(info, size, order):
     assert 'block_name_prefix' in info
@@ -281,12 +293,27 @@ class TestImage(object):
         info = self.image.stat()
         check_stat(info, IMG_SIZE, IMG_ORDER)
 
+    def test_flags(self):
+        flags = self.image.flags()
+        eq(0, flags)
+
     def test_write(self):
         data = rand_data(256)
         self.image.write(data, 0)
 
+    def test_write_with_fadvise_flags(self):
+        data = rand_data(256)
+        self.image.write(data, 0, LIBRADOS_OP_FLAG_FADVISE_DONTNEED)
+        self.image.write(data, 0, LIBRADOS_OP_FLAG_FADVISE_NOCACHE)
+
     def test_read(self):
         data = self.image.read(0, 20)
+        eq(data, '\0' * 20)
+
+    def test_read_with_fadvise_flags(self):
+        data = self.image.read(0, 20, LIBRADOS_OP_FLAG_FADVISE_DONTNEED)
+        eq(data, '\0' * 20)
+        data = self.image.read(0, 20, LIBRADOS_OP_FLAG_FADVISE_RANDOM)
         eq(data, '\0' * 20)
 
     def test_large_write(self):
@@ -406,11 +433,17 @@ class TestImage(object):
         assert_raises(ImageNotFound, self.image.unprotect_snap, 'snap1')
         assert_raises(ImageNotFound, self.image.is_protected_snap, 'snap1')
 
+    @require_features([RBD_FEATURE_EXCLUSIVE_LOCK])
+    def test_remove_with_exclusive_lock(self):
+        assert_raises(ImageBusy, remove_image)
+
+    @blacklist_features([RBD_FEATURE_EXCLUSIVE_LOCK])
     def test_remove_with_snap(self):
         self.image.create_snap('snap1')
         assert_raises(ImageHasSnapshots, remove_image)
         self.image.remove_snap('snap1')
 
+    @blacklist_features([RBD_FEATURE_EXCLUSIVE_LOCK])
     def test_remove_with_watcher(self):
         data = rand_data(256)
         self.image.write(data, 0)
@@ -724,6 +757,7 @@ class TestClone(object):
 
     def test_resize_io(self):
         parent_data = self.image.read(IMG_SIZE / 2, 256)
+        self.image.resize(0)
         self.clone.resize(IMG_SIZE / 2 + 128)
         child_data = self.clone.read(IMG_SIZE / 2, 128)
         eq(child_data, parent_data[:128])
@@ -945,9 +979,18 @@ class TestExclusiveLock(object):
             RBD().clone(ioctx, image_name, 'snap', ioctx, 'clone', features)
             with nested(Image(ioctx, 'clone'), Image(ioctx2, 'clone')) as (
                     image1, image2):
-                image1.write('0'*256, 0)
-                assert_raises(ReadOnlyImage, image2.flatten)
-                image1.flatten()
+                data = rand_data(256)
+                image1.write(data, 0)
+                image2.flatten()
+                assert_raises(ImageNotFound, image1.parent_info)
+                parent = True
+                for x in xrange(30):
+                    try:
+                        image2.parent_info()
+                    except ImageNotFound:
+                        parent = False
+                        break
+                eq(False, parent)
         finally:
             RBD().remove(ioctx, 'clone')
             with Image(ioctx, image_name) as image:
@@ -959,8 +1002,19 @@ class TestExclusiveLock(object):
                 image1, image2):
             image1.write('0'*256, 0)
             for new_size in [IMG_SIZE * 2, IMG_SIZE / 2]:
-                assert_raises(ReadOnlyImage, image2.resize, new_size)
-                image1.resize(new_size);
+                image2.resize(new_size);
+                eq(new_size, image1.size())
+                for x in xrange(30):
+                    if new_size == image2.size():
+                        break
+                    time.sleep(1)
+                eq(new_size, image2.size())
+
+    def test_follower_snap_create(self):
+        with nested(Image(ioctx, image_name), Image(ioctx2, image_name)) as (
+                image1, image2):
+            image2.create_snap('snap1')
+            image1.remove_snap('snap1')
 
     def test_follower_snap_rollback(self):
         with nested(Image(ioctx, image_name), Image(ioctx2, image_name)) as (
@@ -992,5 +1046,5 @@ class TestExclusiveLock(object):
             eq(image1.is_exclusive_lock_owner(), False)
             eq(image2.is_exclusive_lock_owner(), True)
             for offset in [0, IMG_SIZE / 2]:
-                read = image2.read(0, 256)
+                read = image2.read(offset, 256)
                 eq(data, read)

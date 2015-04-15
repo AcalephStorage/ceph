@@ -727,7 +727,10 @@ def matchnum(args, signature, partial=False):
             word = words.pop(0)
 
             try:
-                validate_one(word, desc, partial)
+                # only allow partial matching if we're on the last supplied
+                # word; avoid matching foo bar and foot bar just because
+                # partial is set
+                validate_one(word, desc, partial and (len(words) == 0))
                 valid = True
             except ArgumentError:
                 # matchnum doesn't care about type of error
@@ -865,7 +868,7 @@ def validate(args, signature, partial=False):
                 if not desc.req:
                     # if not required, just push back; it might match
                     # the next arg
-                    print >> sys.stderr, myarg, 'not valid: ', str(e)
+                    save_exception = [ myarg, e ]
                     myargs.insert(0, myarg)
                     break
                 else:
@@ -877,12 +880,16 @@ def validate(args, signature, partial=False):
             # Whew, valid arg acquired.  Store in dict
             matchcnt += 1
             store_arg(desc, d)
+            # Clear prior exception
+            save_exception = None
 
     # Done with entire list of argdescs
     if matchcnt < reqsiglen:
         raise ArgumentTooFew("not enough arguments given")
 
     if myargs and not partial:
+        if save_exception:
+            print >> sys.stderr, save_exception[0], 'not valid: ', str(save_exception[1])
         raise ArgumentError("unused arguments: " + str(myargs))
 
     # Finally, success
@@ -1004,6 +1011,30 @@ def find_cmd_target(childargs):
         if len(valid_dict) == 2:
             # pg doesn't need revalidation; the string is fine
             return 'pg', valid_dict['pgid']
+
+    # If we reached this far it must mean that so far we've been unable to
+    # obtain a proper target from childargs.  This may mean that we are not
+    # dealing with a 'tell' command, or that the specified target is invalid.
+    # If the latter, we likely were unable to catch it because we were not
+    # really looking for it: first we tried to parse a 'CephName' (osd, mon,
+    # mds, followed by and id); given our failure to parse, we tried to parse
+    # a 'CephPgid' instead (e.g., 0.4a).  Considering we got this far though
+    # we were unable to do so.
+    #
+    # We will now check if this is a tell and, if so, forcefully validate the
+    # target as a 'CephName'.  This must be so because otherwise we will end
+    # up sending garbage to a monitor, which is the default target when a
+    # target is not explicitly specified.
+    # e.g.,
+    #   'ceph status' -> target is any one monitor
+    #   'ceph tell mon.* status -> target is all monitors
+    #   'ceph tell foo status -> target is invalid!
+    if len(childargs) > 1 and childargs[0] == 'tell':
+        name = CephName()
+        # CephName.valid() raises on validation error; find_cmd_target()'s
+        # caller should handle them
+        name.valid(childargs[1])
+        return name.nametype, name.nameid
 
     sig = parse_funcsig(['pg', {'name':'pgid', 'type':'CephPgid'}])
     try:

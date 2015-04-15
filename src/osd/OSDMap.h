@@ -244,10 +244,11 @@ private:
   epoch_t cluster_snapshot_epoch;
   string cluster_snapshot;
   bool new_blacklist_entries;
+
   mutable uint64_t cached_up_osd_features;
+
   mutable bool crc_defined;
   mutable uint32_t crc;
-
 
   void _calc_up_osd_features();
 
@@ -262,22 +263,6 @@ private:
   friend class MDS;
 
  public:
-#ifdef _WIN32
-  OSDMap() : epoch(0), 
-	     pool_max(-1),
-	     flags(0),
-	     num_osd(0), max_osd(0),
-	     osd_addrs(new addrs_s),
-	     pg_temp(new map<pg_t,vector<int32_t> >),
-	     primary_temp(new map<pg_t,int32_t>),
-	     osd_uuid(new vector<uuid_d>),
-	     cluster_snapshot_epoch(0),
-	     new_blacklist_entries(false),
-	     crc_defined(false), crc(0),
-	     crush(new CrushWrapper) {
-    memset(&fsid, 0, sizeof(fsid));
-  }
-#else
   OSDMap() : epoch(0), 
 	     pool_max(-1),
 	     flags(0),
@@ -293,7 +278,6 @@ private:
 	     crush(new CrushWrapper) {
     memset(&fsid, 0, sizeof(fsid));
   }
-#endif
 
   // no copying
   /* oh, how i long for c++11...

@@ -30,6 +30,7 @@
 #include "common/WorkQueue.h"
 #include "common/Timer.h"
 #include "common/Throttle.h"
+#include "common/QueueRing.h"
 #include "common/safe_io.h"
 #include "include/str_list.h"
 #include "rgw_common.h"
@@ -147,12 +148,24 @@ public:
   bool get_val(const string& key, const string& def_val, string *out);
   bool get_val(const string& key, int def_val, int *out);
 
+  map<string, string>& get_config_map() { return config_map; }
+
   string get_framework() { return framework; }
 };
 
 
 struct RGWFCGXRequest : public RGWRequest {
-  FCGX_Request fcgx;
+  FCGX_Request *fcgx;
+  QueueRing<FCGX_Request *> *qr;
+
+  RGWFCGXRequest(QueueRing<FCGX_Request *> *_qr) : qr(_qr) {
+    qr->dequeue(&fcgx);
+  }
+
+  ~RGWFCGXRequest() {
+    FCGX_Finish_r(fcgx);
+    qr->enqueue(fcgx);
+  }
 };
 
 struct RGWProcessEnv {
@@ -252,9 +265,13 @@ public:
 
 
 class RGWFCGXProcess : public RGWProcess {
+  int max_connections;
 public:
   RGWFCGXProcess(CephContext *cct, RGWProcessEnv *pe, int num_threads, RGWFrontendConfig *_conf) :
-    RGWProcess(cct, pe, num_threads, _conf) {}
+    RGWProcess(cct, pe, num_threads, _conf),
+    max_connections(num_threads + (num_threads >> 3)) /* have a bit more connections than threads so that requests
+                                                       are still accepted even if we're still processing older requests */
+    {}
   void run();
   void handle_request(RGWRequest *req);
 };
@@ -306,13 +323,21 @@ void RGWFCGXProcess::run()
 
   m_tp.start();
 
+  FCGX_Request fcgx_reqs[max_connections];
+
+  QueueRing<FCGX_Request *> qr(max_connections);
+  for (int i = 0; i < max_connections; i++) {
+    FCGX_Request *fcgx = &fcgx_reqs[i];
+    FCGX_InitRequest(fcgx, sock_fd, 0);
+    qr.enqueue(fcgx);
+  }
+
   for (;;) {
-    RGWFCGXRequest *req = new RGWFCGXRequest;
+    RGWFCGXRequest *req = new RGWFCGXRequest(&qr);
     req->id = ++max_req_id;
     dout(10) << "allocated request req=" << hex << req << dec << dendl;
-    FCGX_InitRequest(&req->fcgx, sock_fd, 0);
     req_throttle.get(1);
-    int ret = FCGX_Accept_r(&req->fcgx);
+    int ret = FCGX_Accept_r(req->fcgx);
     if (ret < 0) {
       delete req;
       dout(0) << "ERROR: FCGX_Accept_r returned " << ret << dendl;
@@ -325,6 +350,12 @@ void RGWFCGXProcess::run()
 
   m_tp.drain(&req_wq);
   m_tp.stop();
+
+  dout(20) << "cleaning up fcgx connections" << dendl;
+
+  for (int i = 0; i < max_connections; i++) {
+    FCGX_Finish_r(&fcgx_reqs[i]);
+  }
 }
 
 struct RGWLoadGenRequest : public RGWRequest {
@@ -500,13 +531,6 @@ static void godown_alarm(int signum)
   _exit(0);
 }
 
-static int call_log_intent(RGWRados *store, void *ctx, rgw_obj& obj, RGWIntentEvent intent)
-{
-  struct req_state *s = (struct req_state *)ctx;
-  return rgw_log_intent(store, s, obj, intent);
-}
-
-
 static int process_request(RGWRados *store, RGWREST *rest, RGWRequest *req, RGWClientIO *client_io, OpsLogSocket *olog)
 {
   int ret = 0;
@@ -524,9 +548,8 @@ static int process_request(RGWRados *store, RGWREST *rest, RGWRequest *req, RGWC
 
   struct req_state *s = &rstate;
 
-  RGWRadosCtx rados_ctx(store, s);
+  RGWObjectCtx rados_ctx(store, s);
   s->obj_ctx = &rados_ctx;
-  store->set_intent_cb(s->obj_ctx, call_log_intent);
 
   s->req_id = store->unique_id(req->id);
 
@@ -633,7 +656,7 @@ done:
 void RGWFCGXProcess::handle_request(RGWRequest *r)
 {
   RGWFCGXRequest *req = static_cast<RGWFCGXRequest *>(r);
-  FCGX_Request *fcgx = &req->fcgx;
+  FCGX_Request *fcgx = req->fcgx;
   RGWFCGX client_io(fcgx);
 
  
@@ -924,6 +947,12 @@ class RGWMongooseFrontend : public RGWFrontend {
   struct mg_context *ctx;
   RGWProcessEnv env;
 
+  void set_conf_default(map<string, string>& m, const string& key, const string& def_val) {
+    if (m.find(key) == m.end()) {
+      m[key] = def_val;
+    }
+  }
+
 public:
   RGWMongooseFrontend(RGWProcessEnv& pe, RGWFrontendConfig *_conf) : conf(_conf), ctx(NULL), env(pe) {
   }
@@ -936,9 +965,23 @@ public:
     char thread_pool_buf[32];
     snprintf(thread_pool_buf, sizeof(thread_pool_buf), "%d", (int)g_conf->rgw_thread_pool_size);
     string port_str;
+    map<string, string> conf_map = conf->get_config_map();
     conf->get_val("port", "80", &port_str);
-    const char *options[] = {"listening_ports", port_str.c_str(), "enable_keep_alive", "yes", "num_threads", thread_pool_buf,
-                             "decode_url", "no", NULL};
+    conf_map.erase("port");
+    conf_map["listening_ports"] = port_str;
+    set_conf_default(conf_map, "enable_keep_alive", "yes");
+    set_conf_default(conf_map, "num_threads", thread_pool_buf);
+    set_conf_default(conf_map, "decode_url", "no");
+
+    const char *options[conf_map.size() * 2 + 1];
+    int i = 0;
+    for (map<string, string>::iterator iter = conf_map.begin(); iter != conf_map.end(); ++iter) {
+      options[i] = iter->first.c_str();
+      options[i + 1] = iter->second.c_str();
+      dout(20)<< "civetweb config: " << options[i] << ": " << (options[i + 1] ? options[i + 1] : "<null>") << dendl;
+      i += 2;
+    }
+    options[i] = NULL;
 
     struct mg_callbacks cb;
     memset((void *)&cb, 0, sizeof(cb));
@@ -1015,7 +1058,6 @@ int main(int argc, const char **argv)
   rgw_tools_init(g_ceph_context);
 
   rgw_init_resolver();
-  rgw_rest_init(g_ceph_context);
   
   curl_global_init(CURL_GLOBAL_ALL);
   
@@ -1024,11 +1066,17 @@ int main(int argc, const char **argv)
   int r = 0;
   RGWRados *store = RGWStoreManager::get_storage(g_ceph_context, true, true);
   if (!store) {
+    mutex.Lock();
+    init_timer.cancel_all_events();
+    init_timer.shutdown();
+    mutex.Unlock();
+
     derr << "Couldn't init storage provider (RADOS)" << dendl;
-    r = EIO;
+    return EIO;
   }
-  if (!r)
-    r = rgw_perf_start(g_ceph_context);
+  r = rgw_perf_start(g_ceph_context);
+
+  rgw_rest_init(g_ceph_context, store->region);
 
   mutex.Lock();
   init_timer.cancel_all_events();
@@ -1038,7 +1086,7 @@ int main(int argc, const char **argv)
   if (r) 
     return 1;
 
-  rgw_user_init(store->meta_mgr);
+  rgw_user_init(store);
   rgw_bucket_init(store->meta_mgr);
   rgw_log_usage_init(g_ceph_context, store);
 
@@ -1204,12 +1252,12 @@ int main(int argc, const char **argv)
   rgw_shutdown_resolver();
   curl_global_cleanup();
 
+  rgw_perf_stop(g_ceph_context);
+
   dout(1) << "final shutdown" << dendl;
   g_ceph_context->put();
 
   ceph::crypto::shutdown();
-
-  rgw_perf_stop(g_ceph_context);
 
   signal_fd_finalize();
 

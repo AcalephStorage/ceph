@@ -35,9 +35,7 @@ struct MRoute : public Message {
   MRoute(bufferlist bl, const entity_inst_t& i)
     : Message(MSG_ROUTE, HEAD_VERSION, COMPAT_VERSION), session_mon_tid(0), dest(i) {
     bufferlist::iterator p = bl.begin();
-
     msg = decode_message(NULL, 0, p);
-    
   }
 private:
   ~MRoute() {

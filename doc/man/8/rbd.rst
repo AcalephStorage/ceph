@@ -123,6 +123,17 @@ Parameters
 
    Map the image read-only.  Equivalent to -o ro.
 
+.. option:: --image-features features
+
+   Specifies which RBD format 2 features are to be enabled when creating
+   an image. The numbers from the desired features below should be added
+   to compute the parameter value:
+
+   +1: layering support
+   +2: striping v2 support
+   +4: exclusive locking support
+   +8: object map support
+
 .. option:: --image-shared
 
    Specifies that the image will be used concurrently by multiple clients.
@@ -151,7 +162,8 @@ Commands
 :command:`clone` [*parent-snapname*] [*image-name*]
   Will create a clone (copy-on-write child) of the parent snapshot.
   Object order will be identical to that of the parent image unless
-  specified. Size will be the same as the parent snapshot.
+  specified. Size will be the same as the parent snapshot. The --stripe-unit
+  and --stripe-count arguments are optional, but must be used together.
 
   The parent snapshot must be protected (see `rbd snap protect`).
   This requires image format 2.
@@ -187,6 +199,9 @@ Commands
   if possible.  For import from stdin, the sparsification unit is
   the data block size of the destination image (1 << order).
 
+  The --stripe-unit and --stripe-count arguments are optional, but must be
+  used together.
+
 :command:`export-diff` [*image-name*] [*dest-path*] [--from-snap *snapname*]
   Exports an incremental diff for an image to dest path (use - for stdout).  If
   an initial snapshot is specified, only changes since that snapshot are included; otherwise,
@@ -194,6 +209,14 @@ Commands
   using the standard --snap option or @snap syntax (see below).  The image diff format includes
   metadata about image size changes, and the start and end snapshots.  It efficiently represents
   discarded or 'zero' regions of the image.
+
+:command:`merge-diff` [*first-diff-path*] [*second-diff-path*] [*merged-diff-path*]
+  Merge two continuous incremental diffs of an image into one single diff. The
+  first diff's end snapshot must be equal with the second diff's start snapshot.
+  The first diff could be - for stdin, and merged diff could be - for stdout, which
+  enables multiple diff files to be merged using something like
+  'rbd merge-diff first second - | rbd merge-diff - third result'. Note this command
+  currently only support the source incremental diff with stripe_count == 1
 
 :command:`import-diff` [*src-path*] [*image-name*]
   Imports an incremental diff of an image and applies it to the current image.  If the diff
@@ -254,6 +277,9 @@ Commands
 
 :command:`showmapped`
   Show the rbd images that are mapped via the rbd kernel module.
+
+:command:`status` [*image-name*]
+  Show the status of the image, including which clients have it open.
 
 :command:`lock` list [*image-name*]
   Show locks held on the image. The first column is the locker
@@ -418,7 +444,7 @@ To release a lock::
 Availability
 ============
 
-**rbd** is part of the Ceph distributed storage system. Please refer to
+**rbd** is part of Ceph, a massively scalable, open-source, distributed storage system. Please refer to
 the Ceph documentation at http://ceph.com/docs for more information.
 
 
