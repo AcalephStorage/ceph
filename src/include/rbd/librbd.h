@@ -19,11 +19,13 @@
 extern "C" {
 #endif
 
-#include <netinet/in.h>
+//#include <netinet/in.h>
 #if defined(__linux__)
 #include <linux/types.h>
 #elif defined(__FreeBSD__)
 #include <sys/types.h>
+#elif defined(_WIN32)
+#include <winsock2.h>
 #endif
 
 #include <string.h>

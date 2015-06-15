@@ -20,7 +20,7 @@
 #include <list>
 #include <map>
 #include <vector>
-#include "../rados/buffer.h"
+#include "../buffer.h"
 #include "../rados/librados.hpp"
 #include "librbd.h"
 

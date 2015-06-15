@@ -8,6 +8,8 @@
 #include "include/rados/librados.hpp"
 #include "include/xlist.h"
 
+#define ERESTART 3545
+
 namespace librbd {
 
 class ImageCtx;

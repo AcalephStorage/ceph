@@ -17,10 +17,7 @@
 #define CEPH_CONTEXT_H
 
 #include "common/dout.h"
-#ifdef _WIN32
-#else
 #include <boost/function.hpp>
-#endif
 #include <list>
 #include <set>
 
@@ -451,8 +448,7 @@ private:
 
 typedef C_GatherBase<Context, Context> C_Gather;
 typedef C_GatherBuilderBase<Context, C_Gather > C_GatherBuilder;
-#ifdef _WIN32
-#else
+
 class FunctionContext : public Context {
 public:
   FunctionContext(const boost::function<void(int)> &callback)
@@ -466,7 +462,6 @@ public:
 private:
   boost::function<void(int)> m_callback;
 };
-#endif
 
 #undef mydout
 

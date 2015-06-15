@@ -15,6 +15,7 @@
 #include <boost/function.hpp>
 #include <boost/scope_exit.hpp>
 
+
 #define dout_subsys ceph_subsys_rbd
 #undef dout_prefix
 #define dout_prefix *_dout << "librbd::ImageWatcher: "
@@ -285,10 +286,18 @@ int ImageWatcher::get_lock_owner_info(entity_name_t *locker, std::string *cookie
 }
 
 int ImageWatcher::lock() {
+#ifdef _WIN32
+    uint8_t flags;
+    int r = rados::cls::lock::lock(&m_image_ctx.md_ctx,
+				 RBD_LOCK_NAME, LOCK_EXCLUSIVE_one,
+				 encode_lock_cookie(), "internal", "",
+				 utime_t(), 0, flags);    
+#else
   int r = rados::cls::lock::lock(&m_image_ctx.md_ctx, m_image_ctx.header_oid,
 				 RBD_LOCK_NAME, LOCK_EXCLUSIVE,
 				 encode_lock_cookie(), WATCHER_LOCK_TAG, "",
 				 utime_t(), 0);
+#endif
   if (r < 0) {
     return r;
   }

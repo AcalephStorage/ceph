@@ -97,7 +97,33 @@ namespace librbd {
     m_finisher->stop();
     delete m_finisher;
   }
+#ifdef _WIN32
+  void LibrbdWriteback::read(const object_t& oid, uint64_t object_no,
+			     const object_locator_t& oloc,
+			     uint64_t off, uint64_t len, snapid_t snapid,
+			     bufferlist *pbl, uint64_t trunc_size,
+			     __u32 trunc_seq, Context *onfinish)
+  {
+    // on completion, take the mutex and then call onfinish.
+    Context *req = new C_Request(m_ictx->cct, onfinish, &m_lock);
 
+    {
+      if (!m_ictx->object_map.object_may_exist(object_no)) {
+	m_finisher->queue(req, -ENOENT);
+	return;
+      }
+    }
+
+    librados::AioCompletion *rados_completion =
+      librados::Rados::aio_create_completion(req, context_cb, NULL);
+    librados::ObjectReadOperation op;
+    op.read(off, len, pbl, NULL);
+    int r = m_ictx->data_ctx.aio_operate(oid.name, rados_completion, &op,
+					 NULL);
+    rados_completion->release();
+    assert(r >= 0);
+  }
+#else
   void LibrbdWriteback::read(const object_t& oid, uint64_t object_no,
 			     const object_locator_t& oloc,
 			     uint64_t off, uint64_t len, snapid_t snapid,
@@ -125,6 +151,7 @@ namespace librbd {
     rados_completion->release();
     assert(r >= 0);
   }
+#endif
 
   bool LibrbdWriteback::may_copy_on_write(const object_t& oid, uint64_t read_off, uint64_t read_len, snapid_t snapid)
   {

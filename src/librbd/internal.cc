@@ -1939,7 +1939,11 @@ reprotect_and_return_err:
 		       << dendl;
 	    return r;
 	  }
+#ifdef _WIN32
+	  ictx->exclusive_locked = (lock_type == LOCK_EXCLUSIVE_one);
+#else
 	  ictx->exclusive_locked = (lock_type == LOCK_EXCLUSIVE);
+#endif
 	  ictx->order = ictx->header.options.order;
 	  ictx->size = ictx->header.image_size;
 	  ictx->object_prefix = ictx->header.block_name;
@@ -2620,9 +2624,15 @@ reprotect_and_return_err:
      * duplicate that code.
      */
     RWLock::RLocker locker(ictx->md_lock);
+#ifdef _WIN32
+    r = rados::cls::lock::lock(&ictx->md_ctx, RBD_LOCK_NAME,
+			       exclusive ? LOCK_EXCLUSIVE_one : LOCK_SHARED,
+			       cookie, tag, "", utime_t(), 0);
+#else
     r = rados::cls::lock::lock(&ictx->md_ctx, ictx->header_oid, RBD_LOCK_NAME,
 			       exclusive ? LOCK_EXCLUSIVE : LOCK_SHARED,
-			       cookie, tag, "", utime_t(), 0);
+			       cookie, tag, "", utime_t(), 0);    
+#endif
     if (r < 0)
       return r;
     notify_change(ictx->md_ctx, ictx->header_oid, ictx);
