@@ -18,7 +18,32 @@
 # include <cryptopp/aes.h>
 # include <cryptopp/filters.h>
 #elif USE_NSS
+
+////////////////////
+// The following lines are a workaround since pratom.h will try to include <intrin.h> which doesn't exist under MinGW
+
+#include <x86intrin.h>
+
+#ifdef _MSC_VER
+#pragma intrinsic(_InterlockedIncrement)
+#pragma intrinsic(_InterlockedDecrement)
+#pragma intrinsic(_InterlockedExchange)
+#pragma intrinsic(_InterlockedExchangeAdd)
+#endif
+
+#define PR_ATOMIC_INCREMENT(val) _InterlockedIncrement((long volatile *)(val))
+#define PR_ATOMIC_DECREMENT(val) _InterlockedDecrement((long volatile *)(val))
+#define PR_ATOMIC_SET(val, newval) \
+        _InterlockedExchange((long volatile *)(val), (long)(newval))
+#define PR_ATOMIC_ADD(ptr, val) \
+        (_InterlockedExchangeAdd((long volatile *)(ptr), (long)(val)) + (val))
+
+#undef _WIN32
 # include <nspr.h>
+#define _WIN32
+
+// end workaround
+////////////////////
 # include <nss.h>
 # include <pk11pub.h>
 #endif
