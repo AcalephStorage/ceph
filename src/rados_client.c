@@ -103,7 +103,7 @@ int main (int argc, const char ** argv)
   }
 
   /* Next, read data using rados_aio_read. */
-  char read_res[100];
+  char read_res[100] = {0};
   err = rados_aio_read(io, "hw", comp, read_res, 12, 0);
   if (err < 0) {
     fprintf(stderr, "%s: Cannot read object. %s %s\n", argv[0], poolname, strerror(-err));
